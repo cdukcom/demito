@@ -73,6 +73,9 @@ app.post("/uplink", async (req, res) => {
 
     const event = (req.query.event || req.get("x-event") || "").toLowerCase() || "up";
     const body  = req.body || {};
+    
+    // Log info recibida via JSON
+    try { console.log("RAW UPLINK:", JSON.stringify(body).slice(0, 4000)); } catch {}
 
     // Info del dispositivo
     const devEui = body?.deviceInfo?.devEui || body?.deviceInfo?.devEUI || "UNKNOWN";
