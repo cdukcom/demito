@@ -1,0 +1,12 @@
+{
+  "name": "chirpstack-twilio-webhook",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "express": "^4.19.2",
+    "twilio": "^5.2.3"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
