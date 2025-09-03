@@ -1,91 +1,159 @@
-import express from "express";
-import bodyParser from "body-parser";
-import twilio from "twilio";
+// server.js
+const express = require("express");
+const bodyParser = require("body-parser");
+const crypto = require("crypto");
 
-const {
-  TWILIO_SID,
-  TWILIO_TOKEN,
-  WHATSAPP_FROM,
-  WHATSAPP_TO,
-  SHARED_SECRET,         // para validar que el POST venga de ChirpStack
-  MIN_SECONDS_BETWEEN,   // rate limit por dispositivo (opcional)
-} = process.env;
+// --- Twilio ---
+const twilioSid   = process.env.TWILIO_SID;
+const twilioToken = process.env.TWILIO_TOKEN;
+const waFrom      = process.env.WHATSAPP_FROM; // ej: "whatsapp:+14155238886"
+const waToList    = (process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean);
+// Secreto opcional para el webhook:
+const hookSecret  = process.env.WEBHOOK_SECRET || ""; // si lo defines, ChirpStack debe mandar header x-secret
 
-const client = twilio(TWILIO_SID, TWILIO_TOKEN);
-const app = express();
-const port = process.env.PORT || 3000;
+let twilioClient = null;
+if (twilioSid && twilioToken) {
+  twilioClient = require("twilio")(twilioSid, twilioToken);
+}
+
+const app  = express();
+const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json({ limit: "1mb" }));
 
-// anti-spam básico por devEUI
-const lastSent = new Map();
-const MIN_GAP = Number(MIN_SECONDS_BETWEEN || 60); // 60s por defecto
+// util: hora local Bogotá
+function nowBogota() {
+  return new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
+}
 
-app.get("/health", (_,res)=>res.send("ok"));
+// util: log compacto
+function log(...args) {
+  console.log(`[${nowBogota()}]`, ...args);
+}
 
-app.post("/uplink", async (req, res) => {
+// -------- health ----------
+app.get("/health", (_, res) => res.send("ok"));
+
+// -------- prueba Twilio ----------
+app.post("/test/whatsapp", async (req, res) => {
   try {
-    // 1) seguridad simple por header
-    const hdr = req.header("x-secret");
-    if (SHARED_SECRET && hdr !== SHARED_SECRET) {
-      return res.status(401).json({ ok:false, error:"unauthorized" });
+    if (!twilioClient) {
+      return res.status(500).json({ ok:false, error: "Twilio no está configurado (TWILIO_SID/TWILIO_TOKEN)" });
+    }
+    const to = (req.body?.to || waToList[0] || "").trim();
+    const body = req.body?.body || "Mensaje de prueba ✅";
+
+    if (!to || !to.startsWith("whatsapp:")) {
+      return res.status(400).json({ ok:false, error: "Falta 'to' (formato whatsapp:+57...)" });
+    }
+    if (!waFrom) {
+      return res.status(400).json({ ok:false, error: "Falta WHATSAPP_FROM" });
     }
 
-    // 2) ChirpStack v4 uplink payload típico
-    const evt = req.body; // JSON
-    // campos comunes:
-    // evt.deviceInfo.devEui, evt.fCnt, evt.object (si tienes codec), evt.rxInfo, evt.txInfo...
+    const msg = await twilioClient.messages.create({ from: waFrom, to, body });
+    log("Twilio OK test ->", to, msg.sid);
+    res.json({ ok: true, sid: msg.sid });
+  } catch (err) {
+    log("Twilio ERROR test:", err.message);
+    res.status(500).json({ ok:false, error: err.message });
+  }
+});
 
-    const devEui = evt?.deviceInfo?.devEui || "unknown";
-    const fCnt  = evt?.fCnt;
-    const obj   = evt?.object || {}; // requiere codec configurado en ChirpStack
-    const ts    = evt?.time || new Date().toISOString();
+// -------- webhook ChirpStack ----------
+app.post("/uplink", async (req, res) => {
+  try {
+    // Seguridad opcional
+    if (hookSecret) {
+      const got = req.get("x-secret") || "";
+      if (got !== hookSecret) {
+        log("Webhook rechazado: x-secret inválido");
+        return res.status(401).json({ ok:false, error:"unauthorized" });
+      }
+    }
 
-    // 3) Lógica de disparo: ajusta al campo que ponga tu codec (por ejemplo "panic": true)
-    //    Si no usas codec, puedes leer evt.data (base64) y decodificar aquí.
-    const panic = obj.panic === true || obj.button === "pressed" || obj.alert === 1;
+    const event = (req.query.event || req.get("x-event") || "").toLowerCase() || "up";
+    const body  = req.body || {};
 
+    // Info del dispositivo
+    const devEui = body?.deviceInfo?.devEui || body?.deviceInfo?.devEUI || "UNKNOWN";
+    const devName = body?.deviceInfo?.name || devEui;
+    const fCnt = body?.fCnt ?? body?.fCntUp ?? null;
+
+    // Decodificación:
+    // 1) Si viene 'object' desde codec (lo preferido)
+    let obj = body?.object || body?.decoded || null;
+
+    // 2) Si no hay 'object', intentamos leer 'data' (base64) y revisar bit0
+    let panic = false;
+    let btnRaw = null;
+
+    if (obj && typeof obj === "object") {
+      // Heurística: si trae "panic" lo usamos; si trae btn_raw lo interpretamos
+      if (typeof obj.panic === "boolean") {
+        panic = obj.panic;
+      } else if (typeof obj.btn_raw === "number") {
+        btnRaw = obj.btn_raw & 0xff;
+        panic = (btnRaw & 0x01) === 1;
+      }
+    } else if (typeof body?.data === "string") {
+      try {
+        const buf = Buffer.from(body.data, "base64");
+        if (buf.length > 0) {
+          btnRaw = buf[0];
+          panic  = (btnRaw & 0x01) === 1;
+          obj = { btn_raw: btnRaw, panic };
+        }
+      } catch (e) {
+        // sin impacto
+      }
+    }
+
+    log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} panic=${panic} obj=`, obj);
+
+    // Si no hay pánico, respondemos OK y listo (útil para otras tramas)
     if (!panic) {
       return res.json({ ok:true, skipped:"no panic flag" });
     }
 
-    // 4) Rate-limit por dispositivo para evitar spam
-    const now = Date.now();
-    const last = lastSent.get(devEui) || 0;
-    if ((now - last)/1000 < MIN_GAP) {
-      return res.json({ ok:true, skipped:`rate-limited (${MIN_GAP}s)` });
+    // Enviar WhatsApp
+    if (!twilioClient || !waFrom || waToList.length === 0) {
+      log("No se envía WhatsApp: falta TWILIO_SID/TWILIO_TOKEN/WHATSAPP_FROM/WHATSAPP_TO");
+      return res.json({ ok:true, warn:"twilio not configured" });
     }
-    lastSent.set(devEui, now);
 
-    // 5) Construye mensaje
-    const name  = evt?.deviceInfo?.name || devEui;
-    const batt  = (obj.battery != null) ? ` | Batería: ${obj.battery}%` : "";
-    const gw    = evt?.rxInfo?.[0]?.gatewayId ? ` | GW: ${evt.rxInfo[0].gatewayId}` : "";
-    const where = (obj.lat && obj.lng) ? ` | Pos: ${obj.lat},${obj.lng}` : "";
+    const text = [
+      "🚨 *Alerta de Pánico*",
+      `Dispositivo: *${devName}* (${devEui})`,
+      fCnt != null ? `Frame: ${fCnt}` : null,
+      `Hora: ${nowBogota()} (Bogotá)`,
+    ].filter(Boolean).join("\n");
 
-    const body = `🚨 *Botón de pánico*`
-      + `\nDispositivo: ${name}`
-      + `\nDevEUI: ${devEui}`
-      + `\nFCnt: ${fCnt ?? "?"}`
-      + `\nHora: ${ts}${batt}${gw}${where}`;
-
-    // 6) Enviar a múltiples destinatarios
-    const tos = (WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean);
     const results = [];
-    for (const to of tos) {
-      const r = await client.messages.create({
-        from: WHATSAPP_FROM,
-        to,
-        body
-      });
-      results.push({ to, sid: r.sid });
+    for (const to of waToList) {
+      try {
+        const msg = await twilioClient.messages.create({
+          from: waFrom,
+          to,
+          body: text,
+        });
+        log("Twilio OK ->", to, msg.sid);
+        results.push({ to, sid: msg.sid, ok:true });
+      } catch (err) {
+        log("Twilio ERROR ->", to, err.message);
+        results.push({ to, ok:false, error: err.message });
+      }
     }
 
-    res.json({ ok:true, sent: results });
+    return res.json({ ok:true, sent: results });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok:false, error: String(err) });
+    log("Webhook ERROR:", err.message);
+    return res.status(500).json({ ok:false, error: err.message });
   }
 });
 
-app.listen(port, ()=>console.log(`listening on ${port}`));
+// 404 amable (útil para ver “Cannot GET”)
+app.use((req, res) => {
+  res.status(404).send("Not Found");
+});
+
+app.listen(port, () => log(`listening on ${port}`));
