@@ -85,6 +85,10 @@ function formatHuman({ event, house, devName, devEui, fCnt, battery_mv }) {
   else if (event === "low_battery"){ title = "🔋 *Batería baja*";              tipo = "Batería baja"; }
   else                            { title = "ℹ️ Evento";                       tipo = event || "N/A"; }
 
+  const mapLine = (location && typeof location.latitude === "number" && typeof location.longitude === "number")
+    ? `Ubicación aprox.: https://maps.google.com/?q=${location.latitude},${location.longitude}`
+    : null;
+
   const lines = [
     title,
     `Lugar: *${house}*`,
@@ -92,6 +96,7 @@ function formatHuman({ event, house, devName, devEui, fCnt, battery_mv }) {
     `Dispositivo: *${devName}* (${devEui})`,
     (typeof fCnt === "number") ? `Frame: ${fCnt}` : null,
     (typeof battery_mv === "number") ? `Batería: ${(battery_mv/1000).toFixed(2)} V` : null,
+    mapLine,
     `Hora: ${nowBogota()} (Bogotá)`,
     "",           // separador visual
     BRAND_SIGNATURE,  // ← firma DUKEVILLA
@@ -321,6 +326,11 @@ app.post("/uplink", async (req, res) => {
       log("No se envía WhatsApp: falta TWILIO_SID/TWILIO_TOKEN/WHATSAPP_FROM o lista vacía");
       return res.json({ ok:true, warn:"twilio not configured" });
     }
+    
+    // elegir gateway con mejor SNR (o el primero)
+    const rx = Array.isArray(body?.rxInfo) ? body.rxInfo : [];
+    const best = rx.slice().sort((a,b) => (b?.snr ?? -Infinity) - (a?.snr ?? -Infinity))[0] || rx[0];
+    const location = best?.location;
 
     // Texto humano (incluye casa por DevEUI y batería si vino del codec)
     const text = formatHuman({
@@ -330,6 +340,7 @@ app.post("/uplink", async (req, res) => {
       devEui,
       fCnt,
       battery_mv: obj?.battery_mv,
+      location,
     });
 
     // Envío a todos los destinatarios
