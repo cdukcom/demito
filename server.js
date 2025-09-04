@@ -77,7 +77,7 @@ function allowPanic(devEui, fCnt) {
 }
 
 // Mensaje humano
-function formatHuman({ event, house, devName, devEui, fCnt, battery_mv }) {
+function formatHuman({ event, house, devName, devEui, fCnt, battery_mv, location }) {
   let title, tipo;
   if (event === "panic")       { title = "🚨 *Alerta de Pánico*";        tipo = "Botón de Pánico"; }
   else if (event === "wall_remove") { title = "⚠️ *Alerta: Desmonte de Pared*"; tipo = "Desmonte de Pared"; }
