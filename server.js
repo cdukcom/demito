@@ -1,7 +1,6 @@
 // server.js
 const express = require("express");
 const bodyParser = require("body-parser");
-const crypto = require("crypto");
 
 // --- Twilio ---
 const twilioSid   = process.env.TWILIO_SID;
@@ -10,6 +9,44 @@ const waFrom      = process.env.WHATSAPP_FROM; // ej: "whatsapp:+14155238886"
 const waToList    = (process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean);
 // Secreto opcional para el webhook:
 const hookSecret  = process.env.WEBHOOK_SECRET || ""; // si lo defines, ChirpStack debe mandar header x-secret
+
+// --- Mapa de casas (DevEUI en minúsculas) ---
+const HOUSE_MAP = {
+  "ffffff100004f749": "Casa Triángulo",
+  "ffffff100004f737": "Casa Cuadrado",
+};
+function houseName(devEui, fallback) {
+  const key = String(devEui||"").toLowerCase();
+  return HOUSE_MAP[key] || fallback || devEui || "Dispositivo";
+}
+
+// Mensaje humano
+function formatHuman({ event, house, devName, devEui, fCnt, battery_mv }) {
+  let title, tipo;
+  if (event === "panic")       { title = "🚨 *Alerta de Pánico*";        tipo = "Botón de Pánico"; }
+  else if (event === "wall_remove") { title = "⚠️ *Alerta: Desmonte de Pared*"; tipo = "Desmonte de Pared"; }
+  else if (event === "wall_restore"){ title = "✅ *Montado / Restaurado*";     tipo = "Restaurado"; }
+  else if (event === "low_battery"){ title = "🔋 *Batería baja*";              tipo = "Batería baja"; }
+  else                            { title = "ℹ️ Evento";                       tipo = event || "N/A"; }
+
+  const lines = [
+    title,
+    `Lugar: *${house}*`,
+    `Tipo: ${tipo}`,
+    `Dispositivo: *${devName}* (${devEui})`,
+    (typeof fCnt === "number") ? `Frame: ${fCnt}` : null,
+    (typeof battery_mv === "number") ? `Batería: ${(battery_mv/1000).toFixed(2)} V` : null,
+    `Hora: ${nowBogota()} (Bogotá)`,
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+// Resolver evento desde el codec nuevo (o compatibilidad vieja)
+function resolveEvent(obj) {
+  if (obj?.event) return obj.event;            // preferimos el codec TLV
+  if (obj?.panic === true) return "panic";     // compatibilidad
+  return null;
+}
 
 let twilioClient = null;
 if (twilioSid && twilioToken) {
@@ -71,74 +108,70 @@ app.post("/uplink", async (req, res) => {
       }
     }
 
+    // "event" de ChirpStack (join, up, ack...), lo usamos solo para log
     const event = (req.query.event || req.get("x-event") || "").toLowerCase() || "up";
     const body  = req.body || {};
-    
-    // Log info recibida via JSON
+
+    // Log compacto del JSON recibido
     try { console.log("RAW UPLINK:", JSON.stringify(body).slice(0, 4000)); } catch {}
 
-    // Info del dispositivo
-    const devEui = body?.deviceInfo?.devEui || body?.deviceInfo?.devEUI || "UNKNOWN";
-    const devName = body?.deviceInfo?.name || devEui;
-    const fCnt = body?.fCnt ?? body?.fCntUp ?? null;
+    // -------- Info del dispositivo (más robusta) --------
+    const devEui  = body?.deviceInfo?.devEui || body?.deviceInfo?.devEUI || "UNKNOWN";
+    const devName =
+      body?.deviceInfo?.deviceName || // ChirpStack suele mandar "deviceName"
+      body?.deviceInfo?.name ||       // por si en alguna versión llega "name"
+      devEui;
 
-    // Decodificación:
-    // 1) Si viene 'object' desde codec (lo preferido)
+    // fCnt (contador de frame) si viene
+    const fCnt = body?.fCnt ?? body?.fCntUp ?? body?.uplinkMetaData?.fCnt ?? null;
+
+    // -------- Decodificación desde el codec --------
+    // Preferimos el objeto "object" (o "decoded") que manda el Device Profile
     let obj = body?.object || body?.decoded || null;
 
-    // 2) Si no hay 'object', intentamos leer 'data' (base64) y revisar bit0
-    let panic = false;
-    let btnRaw = null;
-
-    if (obj && typeof obj === "object") {
-      // Heurística: si trae "panic" lo usamos; si trae btn_raw lo interpretamos
-      if (typeof obj.panic === "boolean") {
-        panic = obj.panic;
-      } else if (typeof obj.btn_raw === "number") {
-        btnRaw = obj.btn_raw & 0xff;
-        panic = (btnRaw & 0x01) === 1;
-      }
-    } else if (typeof body?.data === "string") {
+    // Si por alguna razón no vino "object", intenta una compat mínima con base64 (opcional)
+    if (!obj && typeof body?.data === "string") {
       try {
         const buf = Buffer.from(body.data, "base64");
-        if (buf.length > 0) {
-          btnRaw = buf[0];
-          panic  = (btnRaw & 0x01) === 1;
-          obj = { btn_raw: btnRaw, panic };
-        }
-      } catch (e) {
-        // sin impacto
-      }
+        // Aquí podríamos hacer un parse TLV básico, pero como ya movimos el codec a ChirpStack,
+        // nos quedamos sólo con un fallback neutro:
+        obj = { raw_len: buf.length };
+      } catch { /* no-op */ }
     }
 
-    log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} panic=${panic} obj=`, obj);
+    // Resolver el tipo de evento (panic, wall_remove, wall_restore, low_battery, alive)
+    const eventKey = resolveEvent(obj);
 
-    // Si no hay pánico, respondemos OK y listo (útil para otras tramas)
-    if (!panic) {
-      return res.json({ ok:true, skipped:"no panic flag" });
+    log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} event=${eventKey} obj=`, obj);
+
+    // -------- Política de notificación --------
+    // Enviar WhatsApp para: panic, wall_remove, wall_restore (tú quieres incluir montado)
+    // No enviar (solo log/OK): alive, low_battery (silencioso por ahora)
+    if (!eventKey || eventKey === "alive" || eventKey === "low_battery") {
+      return res.json({ ok:true, skipped: eventKey || "no_event" });
     }
 
-    // Enviar WhatsApp
+    // Verificación Twilio
     if (!twilioClient || !waFrom || waToList.length === 0) {
       log("No se envía WhatsApp: falta TWILIO_SID/TWILIO_TOKEN/WHATSAPP_FROM/WHATSAPP_TO");
       return res.json({ ok:true, warn:"twilio not configured" });
     }
 
-    const text = [
-      "🚨 *Alerta de Pánico*",
-      `Dispositivo: *${devName}* (${devEui})`,
-      fCnt != null ? `Frame: ${fCnt}` : null,
-      `Hora: ${nowBogota()} (Bogotá)`,
-    ].filter(Boolean).join("\n");
+    // Texto humano (incluye casa por DevEUI y batería si vino del codec)
+    const text = formatHuman({
+      event: eventKey,
+      house: houseName(devEui, devName),
+      devName,
+      devEui,
+      fCnt,
+      battery_mv: obj?.battery_mv,
+    });
 
+    // Envío a todos los destinatarios
     const results = [];
     for (const to of waToList) {
       try {
-        const msg = await twilioClient.messages.create({
-          from: waFrom,
-          to,
-          body: text,
-        });
+        const msg = await twilioClient.messages.create({ from: waFrom, to, body: text });
         log("Twilio OK ->", to, msg.sid);
         results.push({ to, sid: msg.sid, ok:true });
       } catch (err) {
