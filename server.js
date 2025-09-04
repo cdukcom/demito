@@ -16,9 +16,27 @@ function getRecipients() {
   return Array.from(new Set([...ALWAYS_ON, ...recipients]));
 }
 
-// Secreto opcional para el webhook:
-const hookSecret  = process.env.WEBHOOK_SECRET || ""; // si lo defines, ChirpStack debe mandar header x-secret
+// Secreto opcional para el webhook y miniWeb
+const hookSecret  = process.env.WEBHOOK_SECRET || "";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+
+// Banner y pie de pagina miniWeb
+const BRAND = {
+  product: "DukeVilla Demito",
+  company: "DukeVilla LLC",
+  year: 2025,
+  url: "https://www.duke-villa.com",
+  email: "sales@duke-villa.com",
+  logoPath: "/static/dukevilla-logo.jpg", 
+};
+
+// Firma corta para WhatsApp (líneas al final)
+const BRAND_SIGNATURE = [
+  `— ${BRAND.product}`,
+  `Desarrollado por ${BRAND.company} — ${BRAND.year}`,
+  `${BRAND.url} | ${BRAND.email}`,
+].join("\n");
+
 
 // --- Mapa de casas (DevEUI en minúsculas) ---
 const HOUSE_MAP = {
@@ -63,7 +81,7 @@ function formatHuman({ event, house, devName, devEui, fCnt, battery_mv }) {
   let title, tipo;
   if (event === "panic")       { title = "🚨 *Alerta de Pánico*";        tipo = "Botón de Pánico"; }
   else if (event === "wall_remove") { title = "⚠️ *Alerta: Desmonte de Pared*"; tipo = "Desmonte de Pared"; }
-  else if (event === "wall_restore"){ title = "✅ *Montado / Restaurado*";     tipo = "Restaurado"; }
+  else if (event === "wall_restore"){ title = "✅ *Restaurado en la Pared*";     tipo = "Restaurado"; }
   else if (event === "low_battery"){ title = "🔋 *Batería baja*";              tipo = "Batería baja"; }
   else                            { title = "ℹ️ Evento";                       tipo = event || "N/A"; }
 
@@ -75,6 +93,8 @@ function formatHuman({ event, house, devName, devEui, fCnt, battery_mv }) {
     (typeof fCnt === "number") ? `Frame: ${fCnt}` : null,
     (typeof battery_mv === "number") ? `Batería: ${(battery_mv/1000).toFixed(2)} V` : null,
     `Hora: ${nowBogota()} (Bogotá)`,
+    "",           // separador visual
+    BRAND_SIGNATURE,  // ← firma DUKEVILLA
   ];
   return lines.filter(Boolean).join("\n");
 }
@@ -96,6 +116,7 @@ const port = process.env.PORT || 8080;
 
 app.use(bodyParser.json({ limit: "1mb" }));
 app.use(bodyParser.urlencoded({ extended: false }));
+app.use("/static", express.static("public", { maxAge: "1d", etag: true }));
 
 // util: hora local Bogotá
 function nowBogota() {
@@ -126,39 +147,64 @@ app.get("/recipients", requireAdmin, (req, res) => {
   const tokenQS = ADMIN_TOKEN ? `?token=${encodeURIComponent(ADMIN_TOKEN)}` : "";
   const fixed = new Set(ALWAYS_ON);
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"/>
-<title>Destinatarios WhatsApp</title><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Destinatarios WhatsApp — ${BRAND.product}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>
-  body{font-family:system-ui,Segoe UI,Arial;max-width:720px;margin:24px auto;padding:0 16px}
+  :root { --gold:#b89b58; --ink:#111; }
+  body{font-family:system-ui,Segoe UI,Arial;max-width:820px;margin:24px auto;padding:0 16px}
+  header.brand{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  header.brand img{height:44px;border-radius:6px}
+  header.brand .title{font-weight:700;font-size:18px}
+  header.brand .tag{font-size:12px;opacity:.8}
+  h1{font-size:20px;margin:12px 0}
   .chip{display:flex;justify-content:space-between;align-items:center;border:1px solid #ddd;border-radius:10px;padding:8px 12px;margin:6px 0}
-  button{padding:8px 12px;border:0;background:#111;color:#fff;border-radius:8px;cursor:pointer}
+  button{padding:8px 12px;border:0;background:var(--ink);color:#fff;border-radius:8px;cursor:pointer}
   button.danger{background:#b00020}
   input[type=text]{flex:1;padding:8px 10px;border:1px solid #ccc;border-radius:8px}
   form{display:flex;gap:8px;margin:12px 0}
   .hint{font-size:12px;opacity:.8}
+  footer{margin-top:28px;padding-top:12px;border-top:1px dashed #ddd;font-size:12px;opacity:.8}
+  a{color:var(--ink);text-decoration:none;border-bottom:1px solid rgba(0,0,0,.2)}
 </style></head><body>
-  <h1>Destinatarios de WhatsApp</h1>
-  <p class="hint">Acepta: <code>whatsapp:+57...</code>, <code>+57...</code> o celular de 10 dígitos (asume +57).</p>
 
-  <h2>Actuales</h2>
-  ${list.map(n => `
-    <div class="chip">
-      <div><strong>${n}</strong> ${fixed.has(n) ? '<small>(fijo)</small>' : ''}</div>
-      ${fixed.has(n) ? '' : `
-        <form method="POST" action="/recipients/remove${tokenQS}">
-          ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
-          <input type="hidden" name="to" value="${n}">
-          <button class="danger" type="submit">Quitar</button>
-        </form>
-      `}
-    </div>
-  `).join("") || "<p>(vacío)</p>"}
+<header class="brand">
+  <img src="${BRAND.logoPath}" alt="Logo DukeVilla">
+  <div>
+    <div class="title">${BRAND.product}</div>
+    <div class="tag">Data Transmission & Signal Processing</div>
+  </div>
+</header>
 
-  <h2>Agregar</h2>
-  <form method="POST" action="/recipients/add${tokenQS}">
-    ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
-    <input name="to" type="text" placeholder="whatsapp:+57..., +57..., 313..." required>
-    <button type="submit">Agregar</button>
-  </form>
+<h1>Destinatarios de WhatsApp</h1>
+<p class="hint">Acepta: <code>whatsapp:+57...</code>, <code>+57...</code> o celular de 10 dígitos (asume +57).</p>
+
+<h2>Actuales</h2>
+${list.map(n => `
+  <div class="chip">
+    <div><strong>${n}</strong> ${fixed.has(n) ? '<small>(fijo)</small>' : ''}</div>
+    ${fixed.has(n) ? '' : `
+      <form method="POST" action="/recipients/remove${tokenQS}">
+        ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
+        <input type="hidden" name="to" value="${n}">
+        <button class="danger" type="submit">Quitar</button>
+      </form>
+    `}
+  </div>
+`).join("") || "<p>(vacío)</p>"}
+
+<h2>Agregar</h2>
+<form method="POST" action="/recipients/add${tokenQS}">
+  ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
+  <input name="to" type="text" placeholder="whatsapp:+57..., +57..., 313..." required>
+  <button type="submit">Agregar</button>
+</form>
+
+<footer>
+  <div>Desarrollado por ${BRAND.company} — ${BRAND.year}</div>
+  <div><a href="${BRAND.url}" target="_blank" rel="noopener">${BRAND.url}</a> •
+      <a href="mailto:${BRAND.email}">${BRAND.email}</a></div>
+</footer>
+
 </body></html>`;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
@@ -194,7 +240,7 @@ app.post("/test/whatsapp", async (req, res) => {
       return res.status(500).json({ ok:false, error: "Twilio no está configurado (TWILIO_SID/TWILIO_TOKEN)" });
     }
     const to = (req.body?.to || getRecipients()[0] || "").trim();
-    const body = req.body?.body || "Mensaje de prueba ✅";
+    const msgBody = req.body?.body || "Mensaje de prueba ✅";
 
     if (!to || !to.startsWith("whatsapp:")) {
       return res.status(400).json({ ok:false, error: "Falta 'to' (formato whatsapp:+57...)" });
@@ -203,7 +249,7 @@ app.post("/test/whatsapp", async (req, res) => {
       return res.status(400).json({ ok:false, error: "Falta WHATSAPP_FROM" });
     }
 
-    const msg = await twilioClient.messages.create({ from: waFrom, to, body });
+    const msg = await twilioClient.messages.create({ from: waFrom, to, body: msgBody });
     log("Twilio OK test ->", to, msg.sid);
     res.json({ ok: true, sid: msg.sid });
   } catch (err) {
