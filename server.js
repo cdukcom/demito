@@ -7,8 +7,10 @@ const twilioSid   = process.env.TWILIO_SID;
 const twilioToken = process.env.TWILIO_TOKEN;
 const waFrom      = process.env.WHATSAPP_FROM; // ej: "whatsapp:+14155238886"
 const waToList    = (process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean);
+
 // Secreto opcional para el webhook:
 const hookSecret  = process.env.WEBHOOK_SECRET || ""; // si lo defines, ChirpStack debe mandar header x-secret
+
 
 // --- Mapa de casas (DevEUI en minúsculas) ---
 const HOUSE_MAP = {
@@ -18,6 +20,20 @@ const HOUSE_MAP = {
 function houseName(devEui, fallback) {
   const key = String(devEui||"").toLowerCase();
   return HOUSE_MAP[key] || fallback || devEui || "Dispositivo";
+}
+
+// --- Anti-duplicados para pánico (por devEUI) ---
+const PANIC_TTL_MS = 30 * 1000;
+const lastPanic = new Map(); // devEui -> { t: ms, fCnt }
+
+function allowPanic(devEui, fCnt) {
+  const now = Date.now();
+  const prev = lastPanic.get(devEui);
+  if (prev && (prev.fCnt === fCnt || (now - prev.t) < PANIC_TTL_MS)) {
+    return false; // duplicado (mismo frame o muy seguido)
+  }
+  lastPanic.set(devEui, { t: now, fCnt: fCnt ?? -1 });
+  return true;
 }
 
 // Mensaje humano
@@ -126,27 +142,29 @@ app.post("/uplink", async (req, res) => {
     const fCnt = body?.fCnt ?? body?.fCntUp ?? body?.uplinkMetaData?.fCnt ?? null;
 
     // -------- Decodificación desde el codec --------
-    // Preferimos el objeto "object" (o "decoded") que manda el Device Profile
     let obj = body?.object || body?.decoded || null;
 
-    // Si por alguna razón no vino "object", intenta una compat mínima con base64 (opcional)
     if (!obj && typeof body?.data === "string") {
       try {
         const buf = Buffer.from(body.data, "base64");
-        // Aquí podríamos hacer un parse TLV básico, pero como ya movimos el codec a ChirpStack,
-        // nos quedamos sólo con un fallback neutro:
         obj = { raw_len: buf.length };
       } catch { /* no-op */ }
     }
 
-    // Resolver el tipo de evento (panic, wall_remove, wall_restore, low_battery, alive)
+    // 1) Resolver el tipo de evento
     const eventKey = resolveEvent(obj);
+
+    // 2) Anti-duplicados SOLO para pánico
+    if (eventKey === "panic" && !allowPanic(devEui, fCnt)) {
+      log("Pánico duplicado (TTL) -> omitido", devEui, fCnt);
+      return res.json({ ok:true, skipped: "panic dedup" });
+    }
 
     log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} event=${eventKey} obj=`, obj);
 
-    // -------- Política de notificación --------
-    // Enviar WhatsApp para: panic, wall_remove, wall_restore (tú quieres incluir montado)
-    // No enviar (solo log/OK): alive, low_battery (silencioso por ahora)
+    // 3) Política de notificación
+    // Enviar WhatsApp para: panic, wall_remove, wall_restore
+    // No enviar: alive, low_battery
     if (!eventKey || eventKey === "alive" || eventKey === "low_battery") {
       return res.json({ ok:true, skipped: eventKey || "no_event" });
     }
