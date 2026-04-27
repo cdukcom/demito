@@ -5,7 +5,7 @@ const bodyParser = require("body-parser");
 // --- Twilio ---
 const twilioSid   = process.env.TWILIO_SID;
 const twilioToken = process.env.TWILIO_TOKEN;
-const waFrom      = process.env.WHATSAPP_FROM; // ej: "whatsapp:+14155238886"
+const waFrom      = process.env.WHATSAPP_FROM;
 
 // --- Destinatarios dinámicos (en memoria) ---
 const ALWAYS_ON = new Set(["whatsapp:+573134991467"]); // fijo por código
@@ -46,18 +46,18 @@ const HOUSE_MAP = {
   "ffffff100004f749": "Botón Pánico Casa Triángulo",
   
   // 🚪 PUERTAS (LSD01)
-  "ffffff1000053192": "Puerta Casa Cuadrado",
-  "ffffff10000531a2": "Puerta Casa Estrella",
-  "ffffff1000053199": "Puerta Casa Triángulo",
+  "ffffff1000053192": "Puerta Rack Cuadrado",
+  "ffffff10000531a2": "Puerta Rack Estrella",
+  "ffffff1000053199": "Puerta Rack Triángulo",
 
   // 🌡️ TEMPERATURA (LST01)
-  "ffffff10000507dc": "Temperatura Casa Cuadrado",
-  "ffffff1000051827": "Temperatura Casa Estrella",
-  "ffffff100005181a": "Temperatura Casa Triángulo",
+  "ffffff10000507dc": "Temperatura Sala Equipos Cuadrado",
+  "ffffff1000051827": "Temperatura Sala Equipos Estrella",
+  "ffffff100005181a": "Temperatura Sala Equipos Triángulo",
 
   // 📍 RASTREO (LTB01-G)
-  "ffffff100004f568": "Rastreo GPS Cuadrado",
-  "ffffff100004cb45": "Rastreo GPS Triángulo",
+  "ffffff100004f568": "Rastreo GPS Equipo Cuadrado",
+  "ffffff100004cb45": "Rastreo GPS Equipo Triángulo",
 };
 
 // --- Estado de sensores (on/off + coordenadas) ---
