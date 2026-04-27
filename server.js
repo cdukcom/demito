@@ -112,23 +112,36 @@ function allowPanic(devEui, fCnt) {
 }
 
 // Mensaje humano
-function formatHuman({ event, house, devName, devEui, fCnt, battery_mv, location }) {
+function formatHuman({ event, house, devName, devEui, fCnt, battery_mv, location, obj }) {
   let title, tipo;
   if (event === "panic")       { title = "🚨 *Alerta de Pánico*";        tipo = "Botón de Pánico"; }
   else if (event === "wall_remove") { title = "⚠️ *Alerta: Desmonte de Pared*"; tipo = "Desmonte de Pared"; }
   else if (event === "wall_restore"){ title = "✅ *Restaurado en la Pared*";     tipo = "Restaurado"; }
   else if (event === "low_battery"){ title = "🔋 *Batería baja*";              tipo = "Batería baja"; }
+  else if (event === "door_open") { title = "🚪 *Puerta Abierta*";        tipo = "Apertura"; }
+  else if (event === "door_close") { title = "🚪 *Puerta Cerrada*";        tipo = "Cierre"; }
+  else if (event === "temperature") { title = "🌡️ *Temperatura / Humedad*";        tipo = "Ambiental"; }
+  else if (event === "gps") { title = "📍 *Ubicación GPS*";        tipo = "Rastreo"; }
   else                            { title = "ℹ️ Evento";                       tipo = event || "N/A"; }
 
   const mapLine = (location && typeof location.latitude === "number" && typeof location.longitude === "number")
     ? `Ubicación aprox.: https://maps.google.com/?q=${location.latitude},${location.longitude}`
     : null;
+  
+  const extra = [];
 
+  if (obj?.temperature != null) extra.push(`Temperatura: ${obj.temperature} °C`);
+  if (obj?.humidity != null) extra.push(`Humedad: ${obj.humidity} %`);
+  if (obj?.latitude != null && obj?.longitude != null) {
+    extra.push(`GPS: ${obj.latitude}, ${obj.longitude}`);
+  }
+  
   const lines = [
     title,
     `Lugar: *${house}*`,
     `Tipo: ${tipo}`,
     `Dispositivo: *${devName}* (${devEui})`,
+    ...extra,
     (typeof fCnt === "number") ? `Frame: ${fCnt}` : null,
     (typeof battery_mv === "number") ? `Batería: ${(battery_mv/1000).toFixed(2)} V` : null,
     mapLine,
@@ -407,7 +420,7 @@ app.post("/uplink", async (req, res) => {
     log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} event=${eventKey} obj=`, obj);
 
     // 3) Política de notificación
-    // Enviar WhatsApp para: panic, wall_remove, wall_restore
+    // Enviar WhatsApp para TODOS los eventos útiles
     // No enviar: alive, low_battery
     if (!eventKey || eventKey === "alive" || eventKey === "low_battery") {
       return res.json({ ok:true, skipped: eventKey || "no_event" });
@@ -436,6 +449,7 @@ app.post("/uplink", async (req, res) => {
       fCnt,
       battery_mv: obj?.battery_mv,
       location,
+      obj
     });
 
     // Envío a todos los destinatarios
