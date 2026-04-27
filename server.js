@@ -24,9 +24,9 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const BRAND = {
   product: "DukeVilla Demito",
   company: "DukeVilla LLC",
-  year: 2025,
-  url: "https://www.duke-villa.com",
-  email: "sales@duke-villa.com",
+  year: 2026,
+  url: "https://www.duke-villa.com - www.fibersas.com",
+  email: "sales@duke-villa.com - carlos@fibersas.com - +57 3134991444",
   logoPath: "/static/dukevilla-logo.jpg", 
 };
 
@@ -40,9 +40,44 @@ const BRAND_SIGNATURE = [
 
 // --- Mapa de casas (DevEUI en minúsculas) ---
 const HOUSE_MAP = {
-  "ffffff100004f749": "Casa Triángulo",
-  "ffffff100004f737": "Casa Cuadrado",
+  // 🔴 BOTONES PÁNICO (LBM01)
+  "ffffff100004f737": "Botón Pánico Casa Cuadrado",
+  "ffffff100004f73f": "Botón Pánico Casa Estrella",
+  "ffffff100004f749": "Botón Pánico Casa Triángulo",
+  
+  // 🚪 PUERTAS (LSD01)
+  "ffffff1000053192": "Puerta Casa Cuadrado",
+  "ffffff10000531a2": "Puerta Casa Estrella",
+  "ffffff1000053199": "Puerta Casa Triángulo",
+
+  // 🌡️ TEMPERATURA (LST01)
+  "ffffff10000507dc": "Temperatura Casa Cuadrado",
+  "ffffff1000051827": "Temperatura Casa Estrella",
+  "ffffff100005181a": "Temperatura Casa Triángulo",
+
+  // 📍 RASTREO (LTB01-G)
+  "ffffff100004f568": "Rastreo GPS Cuadrado",
+  "ffffff100004cb45": "Rastreo GPS Triángulo",
 };
+
+// --- Estado de sensores (on/off + coordenadas) ---
+const SENSOR_CONFIG = {
+  "ffffff100004f737": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff100004f73f": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff100004f749": { enabled: false, lat: 4.718681, lng: -74.037496 },
+
+  "ffffff1000053192": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff10000531a2": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff1000053199": { enabled: false, lat: 4.718681, lng: -74.037496 },
+
+  "ffffff10000507dc": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff1000051827": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff100005181a": { enabled: false, lat: 4.718681, lng: -74.037496 },
+
+  "ffffff100004f568": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff100004cb45": { enabled: false, lat: 4.718681, lng: -74.037496 },
+};
+
 function houseName(devEui, fallback) {
   const key = String(devEui||"").toLowerCase();
   return HOUSE_MAP[key] || fallback || devEui || "Dispositivo";
@@ -204,6 +239,36 @@ ${list.map(n => `
   <button type="submit">Agregar</button>
 </form>
 
+<h2>Activar Sensores</h2>
+
+<form method="POST" action="/sensors/update${tokenQS}" style="display:block;width:100%;">
+  ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
+
+  ${Object.entries(HOUSE_MAP).map(([dev, name]) => {
+    const cfg = SENSOR_CONFIG[dev] || {};
+    return `
+      <div style="display:flex;align-items:center;gap:12px;margin:8px 0;padding-bottom:6px;border-bottom:1px dashed #ddd;">
+    
+        <input type="checkbox" name="enabled_${dev}" ${cfg.enabled ? "checked" : ""}>
+    
+        <label style="min-width:300px;font-weight:600">
+          ${name}
+        </label>
+
+        <span style="font-size:12px;opacity:0.7;margin-left:10px">
+          Coordenadas (decimal):
+        </span>
+
+        <input name="lat_${dev}" value="${cfg.lat || ""}" style="width:100px;text-align:center">
+        <input name="lng_${dev}" value="${cfg.lng || ""}" style="width:100px;text-align:center">
+
+      </div>
+    `;
+  }).join("")}
+
+  <button type="submit">Actualizar configuración sensor</button>
+</form>
+
 <footer>
   <div>Desarrollado por ${BRAND.company} — ${BRAND.year}</div>
   <div><a href="${BRAND.url}" target="_blank" rel="noopener">${BRAND.url}</a> •
@@ -234,6 +299,25 @@ app.post("/recipients/remove", requireAdmin, (req, res) => {
   if (!recipients.has(to)) return res.status(404).send("Número no está en la lista");
   recipients.delete(to);
   log("Recipient DEL:", to);
+  const back = ADMIN_TOKEN ? `/recipients?token=${encodeURIComponent(ADMIN_TOKEN)}` : "/recipients";
+  res.redirect(back);
+});
+
+app.post("/sensors/update", requireAdmin, (req, res) => {
+  Object.keys(HOUSE_MAP).forEach(dev => {
+    const enabled = req.body[`enabled_${dev}`] === "on";
+    const lat = parseFloat(req.body[`lat_${dev}`]);
+    const lng = parseFloat(req.body[`lng_${dev}`]);
+
+    SENSOR_CONFIG[dev] = {
+      enabled,
+      lat: isNaN(lat) ? null : lat,
+      lng: isNaN(lng) ? null : lng,
+    };
+  });
+
+  log("SENSOR CONFIG UPDATED", SENSOR_CONFIG);
+
   const back = ADMIN_TOKEN ? `/recipients?token=${encodeURIComponent(ADMIN_TOKEN)}` : "/recipients";
   res.redirect(back);
 });
@@ -305,6 +389,15 @@ app.post("/uplink", async (req, res) => {
     // 1) Resolver el tipo de evento
     const eventKey = resolveEvent(obj);
 
+    // --- FILTRO POR SENSOR ACTIVADO ---
+    const devKey = String(devEui || "").toLowerCase();
+    const cfg = SENSOR_CONFIG[devKey];
+
+    if (!cfg || !cfg.enabled) {
+      log("Sensor no configurado odesactivado → no se envía", devKey);
+      return res.json({ ok:true, skipped: "disabled" });
+    }
+
     // 2) Anti-duplicados SOLO para pánico
     if (eventKey === "panic" && !allowPanic(devEui, fCnt)) {
       log("Pánico duplicado (TTL) -> omitido", devEui, fCnt);
@@ -330,7 +423,9 @@ app.post("/uplink", async (req, res) => {
     // elegir gateway con mejor SNR (o el primero)
     const rx = Array.isArray(body?.rxInfo) ? body.rxInfo : [];
     const best = rx.slice().sort((a,b) => (b?.snr ?? -Infinity) - (a?.snr ?? -Infinity))[0] || rx[0];
-    const location = best?.location;
+    const location = (cfg && cfg.lat && cfg.lng)
+      ? { latitude: cfg.lat, longitude: cfg.lng }
+      : best?.location;
 
     // Texto humano (incluye casa por DevEUI y batería si vino del codec)
     const text = formatHuman({
