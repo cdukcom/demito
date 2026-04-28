@@ -465,11 +465,20 @@ app.post("/uplink", async (req, res) => {
     const sensorName = HOUSE_MAP[devKey] || "";
     const isGpsDevice = sensorName.toLowerCase().includes("gps");
 
-    const location = (obj?.latitude != null && obj?.longitude != null)
-      ? { latitude: obj.latitude, longitude: obj.longitude }
-      : isGpsDevice
-        ? null   // 👈 NO mostrar mapa si no hay coordenadas
-        : best?.location;
+    let location = null;
+
+    // 1. Si el sensor trae GPS real → usarlo
+    if (obj?.latitude != null && obj?.longitude != null) {
+      location = { latitude: obj.latitude, longitude: obj.longitude };
+
+    // 2. Si NO trae GPS → usar configuración manual (TU WEB)
+    } else if (cfg?.lat != null && cfg?.lng != null) {
+      location = { latitude: cfg.lat, longitude: cfg.lng };
+
+    // 3. Fallback final → gateway
+    } else if (!isGpsDevice && best?.location) {
+    location = best.location;
+    }
 
     // Texto humano (incluye casa por DevEUI y batería si vino del codec)
     const text = formatHuman({
