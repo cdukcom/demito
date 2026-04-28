@@ -70,9 +70,9 @@ const SENSOR_CONFIG = {
   "ffffff10000531a2": { enabled: false, lat: 4.718681, lng: -74.037496 },
   "ffffff1000053199": { enabled: false, lat: 4.718681, lng: -74.037496 },
 
-  "ffffff10000507dc": { enabled: false, lat: 4.718681, lng: -74.037496 },
-  "ffffff1000051827": { enabled: false, lat: 4.718681, lng: -74.037496 },
-  "ffffff100005181a": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff10000507dc": { enabled: false, lat: 4.718681, lng: -74.037496, threshold: 45 },
+  "ffffff1000051827": { enabled: false, lat: 4.718681, lng: -74.037496, threshold: 45 },
+  "ffffff100005181a": { enabled: false, lat: 4.718681, lng: -74.037496, threshold: 45 },
 
   "ffffff100004f568": { enabled: false, lat: 4.718681, lng: -74.037496 },
   "ffffff100004cb45": { enabled: false, lat: 4.718681, lng: -74.037496 },
@@ -122,6 +122,7 @@ function formatHuman({ event, house, devName, devEui, fCnt, battery_mv, location
   else if (event === "door_close") { title = "🚪 *Puerta Cerrada*";        tipo = "Cierre"; }
   else if (event === "temperature") { title = "🌡️ *Temperatura / Humedad*";        tipo = "Ambiental"; }
   else if (event === "gps") { title = "📍 *Ubicación GPS*";        tipo = "Rastreo"; }
+  else if (event === "high_temperature") { title = "🔥 *ALERTA: Temperatura Alta*";       tipo = "Temperatura crítica"; }
   else                            { title = "ℹ️ Evento";                       tipo = event || "N/A"; }
 
   const mapLine = (location && typeof location.latitude === "number" && typeof location.longitude === "number")
@@ -259,6 +260,9 @@ ${list.map(n => `
 
   ${Object.entries(HOUSE_MAP).map(([dev, name]) => {
     const cfg = SENSOR_CONFIG[dev] || {};
+    const nameLower = name.toLowerCase();
+    const isTemp = nameLower.includes("temperatura");
+    const isGPS  = nameLower.includes("gps");
     return `
       <div style="display:flex;align-items:center;gap:12px;margin:8px 0;padding-bottom:6px;border-bottom:1px dashed #ddd;">
     
@@ -268,13 +272,20 @@ ${list.map(n => `
           ${name}
         </label>
 
-        <span style="font-size:12px;opacity:0.7;margin-left:10px">
-          Coordenadas (decimal):
-        </span>
+        ${!isGPS ? `
+          <span style="font-size:12px;opacity:0.7;margin-left:10px">
+            Coordenadas:
+          </span>
+          <input name="lat_${dev}" value="${cfg.lat || ""}" style="width:90px;text-align:center">
+          <input name="lng_${dev}" value="${cfg.lng || ""}" style="width:90px;text-align:center">
+        ` : ``}
 
-        <input name="lat_${dev}" value="${cfg.lat || ""}" style="width:100px;text-align:center">
-        <input name="lng_${dev}" value="${cfg.lng || ""}" style="width:100px;text-align:center">
-
+        ${isTemp ? `
+          <span style="font-size:12px;opacity:0.7;margin-left:10px">
+            Umbral (°C):
+          </span>
+          <input name="threshold_${dev}" value="${cfg.threshold ?? 45}" style="width:70px;text-align:center">
+        ` : ``}
       </div>
     `;
   }).join("")}
@@ -321,11 +332,15 @@ app.post("/sensors/update", requireAdmin, (req, res) => {
     const enabled = req.body[`enabled_${dev}`] === "on";
     const lat = parseFloat(req.body[`lat_${dev}`]);
     const lng = parseFloat(req.body[`lng_${dev}`]);
+    const threshold = parseFloat(req.body[`threshold_${dev}`]);
+
+    const prev = SENSOR_CONFIG[dev] || {};
 
     SENSOR_CONFIG[dev] = {
       enabled,
-      lat: isNaN(lat) ? null : lat,
-      lng: isNaN(lng) ? null : lng,
+      lat: isNaN(lat) ? prev.lat : lat,
+      lng: isNaN(lng) ? prev.lng : lng,
+      threshold: isNaN(threshold) ? (prev.threshold ?? 45) : threshold,
     };
   });
 
@@ -402,12 +417,23 @@ app.post("/uplink", async (req, res) => {
     // 1) Resolver el tipo de evento
     const eventKey = resolveEvent(obj);
 
+    let finalEvent = eventKey;
+
     // --- FILTRO POR SENSOR ACTIVADO ---
     const devKey = String(devEui || "").toLowerCase();
     const cfg = SENSOR_CONFIG[devKey];
 
+    if (eventKey === "temperature" && obj?.temperature != null) {
+      const threshold = cfg?.threshold ?? 45;
+
+      if (obj.temperature >= threshold) {
+        finalEvent = "high_temperature";
+        log(`🔥 Temp alta: ${obj.temperature} >= ${threshold}`);
+      }
+    }
+
     if (!cfg || !cfg.enabled) {
-      log("Sensor no configurado odesactivado → no se envía", devKey);
+      log("Sensor no configurado o desactivado → no se envía", devKey);
       return res.json({ ok:true, skipped: "disabled" });
     }
 
@@ -417,13 +443,13 @@ app.post("/uplink", async (req, res) => {
       return res.json({ ok:true, skipped: "panic dedup" });
     }
 
-    log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} event=${eventKey} obj=`, obj);
+    log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} event=${finalEvent} obj=`, obj);
 
     // 3) Política de notificación
     // Enviar WhatsApp para TODOS los eventos útiles
     // No enviar: alive, low_battery
-    if (!eventKey || eventKey === "alive" || eventKey === "low_battery") {
-      return res.json({ ok:true, skipped: eventKey || "no_event" });
+    if (!finalEvent || finalEvent === "alive" || finalEvent === "low_battery") {
+      return res.json({ ok:true, skipped: finalEvent || "no_event" });
     }
 
     // Verificación Twilio
@@ -436,13 +462,18 @@ app.post("/uplink", async (req, res) => {
     // elegir gateway con mejor SNR (o el primero)
     const rx = Array.isArray(body?.rxInfo) ? body.rxInfo : [];
     const best = rx.slice().sort((a,b) => (b?.snr ?? -Infinity) - (a?.snr ?? -Infinity))[0] || rx[0];
-    const location = (cfg && cfg.lat && cfg.lng)
-      ? { latitude: cfg.lat, longitude: cfg.lng }
-      : best?.location;
+    const sensorName = HOUSE_MAP[devKey] || "";
+    const isGpsDevice = sensorName.toLowerCase().includes("gps");
+
+    const location = (obj?.latitude != null && obj?.longitude != null)
+      ? { latitude: obj.latitude, longitude: obj.longitude }
+      : isGpsDevice
+        ? null   // 👈 NO mostrar mapa si no hay coordenadas
+        : best?.location;
 
     // Texto humano (incluye casa por DevEUI y batería si vino del codec)
     const text = formatHuman({
-      event: eventKey,
+      event: finalEvent,
       house: houseName(devEui, devName),
       devName,
       devEui,
