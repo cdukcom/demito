@@ -696,6 +696,14 @@ async function saveSensorEvent(
       ]
     );
 
+    console.log(
+      "DB SAVE",
+      source,
+      sensorId,
+      sensorName,
+      eventType
+    );
+
   } catch(err) {
 
     console.error(
