@@ -177,10 +177,30 @@ BLE DEVICES
 */
 
 const BLE_DEVICES = {
-  "c30000585b9f": "Baño 1",
-  "c30000585b66": "Baño 2",
-  "c30000585ba2": "Baño 3",
+  "c30000585b9f": "Baño Cuadrado",
+  "c30000585b66": "Baño Triángulo",
+  "c30000585ba2": "Baño Estrella",
   "c300004d2d4c": "Manilla B7"
+};
+
+const BLE_CONFIG = {
+  "c30000585b9f": {
+    enabled: false,
+    lat: 4.718681,
+    lng: -74.037496
+  },
+
+  "c30000585b66": {
+    enabled: false,
+    lat: 4.718681,
+    lng: -74.037496
+  },
+
+  "c30000585ba2": {
+    enabled: false,
+    lat: 4.718681,
+    lng: -74.037496
+  }
 };
 
 /*
@@ -583,6 +603,32 @@ mqttClient.on("error", (err) => {
   log("BLE MQTT ERROR", err.message);
 });
 
+function processBleGatewayPacket(bleBody) {
+
+  if (!Array.isArray(bleBody.adv)) {
+    return;
+  }
+
+  for (const adv of bleBody.adv) {
+
+    const mac = String(
+      adv.mac || ""
+    ).toLowerCase();
+
+    if (!BLE_DEVICES[mac]) {
+      continue;
+    }
+
+    console.log(
+      "[BLE SENSOR]",
+      BLE_DEVICES[mac],
+      adv.raw
+    );
+
+  }
+
+}
+
 mqttClient.on("message", async (topic, payload) => {
 
   console.log(
@@ -602,6 +648,10 @@ mqttClient.on("message", async (topic, payload) => {
       topic,
       topic,
       "ble_scan",
+      bleBody
+    );
+
+    processBleGatewayPacket(
       bleBody
     );
 
