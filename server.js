@@ -603,7 +603,7 @@ mqttClient.on("error", (err) => {
   log("BLE MQTT ERROR", err.message);
 });
 
-function processBleGatewayPacket(bleBody) {
+async function processBleGatewayPacket(topic, bleBody) {
 
   if (!Array.isArray(bleBody.adv)) {
     return;
@@ -611,18 +611,80 @@ function processBleGatewayPacket(bleBody) {
 
   for (const adv of bleBody.adv) {
 
-    const mac = String(
-      adv.mac || ""
-    ).toLowerCase();
+    const mac = String(adv.mac || "").toLowerCase();
 
     if (!BLE_DEVICES[mac]) {
       continue;
     }
 
+    const baseEvent = {
+      gateway: bleBody.gw || null,
+      gateway_time: bleBody.tm || null,
+      gateway_seq: bleBody.seq || null,
+      sensor_name: BLE_DEVICES[mac],
+      mac: mac,
+      type: adv.type || "unknown",
+      rssi: adv.rssi ?? null,
+      adv_time: adv.tm || null
+    };
+
+    if (adv.type === "other") {
+
+      const event = {
+        ...baseEvent,
+        raw: adv.raw || null
+      };
+
+      console.log(
+        "[BLE OCC]",
+        event.sensor_name,
+        event.raw
+      );
+
+      await saveSensorEvent(
+        "BLE",
+        mac,
+        topic,
+        "ble_occ",
+        event
+      );
+
+      continue;
+    }
+
+    if (adv.type === "info_v3") {
+
+      const event = {
+        ...baseEvent,
+        battery: adv.battery ?? null,
+        firmware: adv.ver || null,
+        screen: adv.screen || null,
+        product: adv.product || null
+      };
+
+      console.log(
+        "[BLE INFO]",
+        event.sensor_name,
+        `battery=${event.battery}`,
+        `fw=${event.firmware}`,
+        `product=${event.product}`
+      );
+
+      await saveSensorEvent(
+        "BLE",
+        mac,
+        topic,
+        "ble_info",
+        event
+      );
+
+      continue;
+    }
+
     console.log(
-      "[BLE SENSOR]",
+      "[BLE UNKNOWN]",
       BLE_DEVICES[mac],
-      adv.raw
+      adv.type
     );
 
   }
@@ -651,7 +713,8 @@ mqttClient.on("message", async (topic, payload) => {
       bleBody
     );
 
-    processBleGatewayPacket(
+    await processBleGatewayPacket(
+      topic,
       bleBody
     );
 
