@@ -447,6 +447,14 @@ app.post("/uplink", async (req, res) => {
 
     let finalEvent = eventKey;
 
+    await saveSensorEvent(
+      "LORAWAN",
+      devEui,
+      devName,
+      eventKey || "unknown",
+      body
+    );
+
     // --- FILTRO POR SENSOR ACTIVADO ---
     const devKey = String(devEui || "").toLowerCase();
     const cfg = SENSOR_CONFIG[devKey];
@@ -575,13 +583,36 @@ mqttClient.on("error", (err) => {
   log("BLE MQTT ERROR", err.message);
 });
 
-mqttClient.on("message", (topic, payload) => {
+mqttClient.on("message", async (topic, payload) => {
 
   console.log(
     "[BLE]",
     topic,
-    payload.toString().substring(0,150)
+    payload.toString().substring(0,300)
   );
+
+  try {
+
+    const bleBody = JSON.parse(
+      payload.toString()
+    );
+
+    await saveSensorEvent(
+      "BLE",
+      topic,
+      topic,
+      "ble_scan",
+      bleBody
+    );
+
+  } catch(err) {
+
+    console.error(
+      "BLE SAVE ERROR",
+      err.message
+    );
+
+  }
 
 });
 
@@ -616,6 +647,63 @@ async function initDatabase() {
   `);
 
   log("sensor_history OK");
+
+}
+
+/*
+=========================================
+SAVE SENSOR EVENT
+=========================================
+*/
+
+async function saveSensorEvent(
+  source,
+  sensorId,
+  sensorName,
+  eventType,
+  payload
+) {
+
+  try {
+
+    await db.query(
+      `
+      INSERT INTO sensor_history
+      (
+        ts,
+        source,
+        sensor_id,
+        sensor_name,
+        event_type,
+        payload
+      )
+      VALUES
+      (
+        NOW(),
+        $1,
+        $2,
+        $3,
+        $4,
+        $5
+      )
+      `,
+      [
+        source,
+        sensorId,
+        sensorName,
+        eventType,
+        payload
+      ]
+    );
+
+  } catch(err) {
+
+    console.error(
+      "SAVE EVENT ERROR",
+      err
+    );
+
+  }
 
 }
 
