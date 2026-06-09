@@ -1,6 +1,7 @@
 // server.js
 const express = require("express");
 const bodyParser = require("body-parser");
+const mqtt = require("mqtt");
 
 // --- Twilio ---
 const twilioSid   = process.env.TWILIO_SID;
@@ -167,6 +168,19 @@ if (twilioSid && twilioToken) {
 
 const app  = express();
 const port = process.env.PORT || 8080;
+
+/*
+=========================================
+BLE DEVICES
+=========================================
+*/
+
+const BLE_DEVICES = {
+  "c30000585b9f": "Baño 1",
+  "c30000585b66": "Baño 2",
+  "c30000585ba2": "Baño 3",
+  "c300004d2d4c": "Manilla B7"
+};
 
 app.use(bodyParser.json({ limit: "1mb" }));
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -515,6 +529,46 @@ app.post("/uplink", async (req, res) => {
 // 404 amable (útil para ver “Cannot GET”)
 app.use((req, res) => {
   res.status(404).send("Not Found");
+});
+
+/*
+=========================================
+BLE MQTT
+=========================================
+*/
+
+const mqttClient = mqtt.connect(
+  process.env.MQTT_URL || "mqtt://lorawan.duke-villa.com:1883"
+);
+
+mqttClient.on("connect", () => {
+
+  log("BLE MQTT conectado");
+
+  mqttClient.subscribe("/gw/+/status", (err) => {
+
+    if (err) {
+      log("BLE MQTT subscribe ERROR", err.message);
+    } else {
+      log("BLE MQTT suscrito a /gw/+/status");
+    }
+
+  });
+
+});
+
+mqttClient.on("error", (err) => {
+  log("BLE MQTT ERROR", err.message);
+});
+
+mqttClient.on("message", (topic, payload) => {
+
+  console.log(
+    "[BLE]",
+    topic,
+    payload.toString().substring(0,150)
+  );
+
 });
 
 app.listen(port, () => log(`listening on ${port}`));
