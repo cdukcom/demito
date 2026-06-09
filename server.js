@@ -2,6 +2,7 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const mqtt = require("mqtt");
+const { Pool } = require("pg");
 
 // --- Twilio ---
 const twilioSid   = process.env.TWILIO_SID;
@@ -181,6 +182,19 @@ const BLE_DEVICES = {
   "c30000585ba2": "Baño 3",
   "c300004d2d4c": "Manilla B7"
 };
+
+/*
+=========================================
+POSTGRES
+=========================================
+*/
+
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
 app.use(bodyParser.json({ limit: "1mb" }));
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -571,4 +585,53 @@ mqttClient.on("message", (topic, payload) => {
 
 });
 
-app.listen(port, () => log(`listening on ${port}`));
+/*
+=========================================
+DATABASE INIT
+=========================================
+*/
+
+async function initDatabase() {
+
+  await db.query(`
+
+    CREATE TABLE IF NOT EXISTS sensor_history (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      ts TIMESTAMPTZ NOT NULL,
+
+      source TEXT NOT NULL,
+
+      sensor_id TEXT NOT NULL,
+
+      sensor_name TEXT,
+
+      event_type TEXT,
+
+      payload JSONB NOT NULL
+
+    );
+
+  `);
+
+  log("sensor_history OK");
+
+}
+
+initDatabase()
+  .then(() => {
+
+    app.listen(port, () => {
+      log(`listening on ${port}`);
+    });
+
+  })
+  .catch(err => {
+
+    console.error(
+      "DATABASE INIT ERROR",
+      err
+    );
+
+  });
