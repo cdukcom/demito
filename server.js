@@ -603,6 +603,57 @@ mqttClient.on("error", (err) => {
   log("BLE MQTT ERROR", err.message);
 });
 
+function decodeMinewOccupancy(raw) {
+
+  if (!raw || raw.length < 62) {
+    return null;
+  }
+
+  const b = [];
+
+  for (let i = 0; i < raw.length; i += 2) {
+    b.push(
+      parseInt(
+        raw.substring(i, i + 2),
+        16
+      )
+    );
+  }
+
+  const status = b[13];
+
+  return {
+
+    frame_version: b[8],
+
+    serial: b[10],
+
+    distance_mm:
+      b[11] |
+      (b[12] << 8),
+
+    status_byte: status,
+
+    low_battery:
+      (status & 0x08) !== 0,
+
+    occupied:
+      (status & 0x04) !== 0,
+
+    infrared:
+      (status & 0x02) !== 0,
+
+    dismantle:
+      (status & 0x01) !== 0,
+
+    occupy_count: b[14],
+
+    dismantle_count: b[15]
+
+  };
+
+}
+
 async function processBleGatewayPacket(topic, bleBody) {
 
   if (!Array.isArray(bleBody.adv)) {
@@ -630,15 +681,23 @@ async function processBleGatewayPacket(topic, bleBody) {
 
     if (adv.type === "other") {
 
+      const decoded =
+        decodeMinewOccupancy(
+          adv.raw
+        );
+
       const event = {
         ...baseEvent,
-        raw: adv.raw || null
+
+        raw: adv.raw || null,
+
+        telemetry: decoded
       };
 
       console.log(
         "[BLE OCC]",
         event.sensor_name,
-        event.raw
+        decoded
       );
 
       await saveSensorEvent(
@@ -656,10 +715,13 @@ async function processBleGatewayPacket(topic, bleBody) {
 
       const event = {
         ...baseEvent,
-        battery: adv.battery ?? null,
-        firmware: adv.ver || null,
-        screen: adv.screen || null,
-        product: adv.product || null
+
+        telemetry: {
+          battery: adv.battery ?? null,
+          firmware: adv.ver || null,
+          screen: adv.screen || null,
+          product: adv.product || null
+        }
       };
 
       console.log(
