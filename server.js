@@ -242,6 +242,35 @@ function requireAdmin(req, res, next) {
 // -------- health ----------
 app.get("/health", (_, res) => res.send("ok"));
 
+app.get("/api/ble/latest", async (req, res) => {
+
+  try {
+
+    const result = await db.query(`
+      SELECT DISTINCT ON (sensor_id)
+        sensor_id,
+        event_type,
+        payload,
+        ts
+      FROM sensor_history
+      WHERE source='BLE'
+      ORDER BY sensor_id, ts DESC
+    `);
+
+    res.json(result.rows);
+
+  } catch(err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message
+    });
+
+  }
+
+});
+
 // -------- miniWeb adición y borrado de números Whatsapp ------
 
 app.get("/recipients", requireAdmin, (req, res) => {
@@ -340,6 +369,39 @@ ${list.map(n => `
 
   <button type="submit">Actualizar configuración sensor</button>
 </form>
+
+<h2>Sensores BLE</h2>
+
+<div id="bleStatus">
+
+  <div style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0;">
+    Baño Cuadrado
+  </div>
+
+  <div style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0;">
+    Baño Triángulo
+  </div>
+
+  <div style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0;">
+    Baño Estrella
+  </div>
+
+</div>
+
+<script>
+
+fetch("/api/ble/latest")
+  .then(r => r.json())
+  .then(data => {
+
+    console.log(
+      "BLE DATA",
+      data
+    );
+
+  });
+
+</script>
 
 <footer>
   <div>Desarrollado por ${BRAND.company} — ${BRAND.year}</div>
@@ -727,9 +789,9 @@ async function processBleGatewayPacket(topic, bleBody) {
       console.log(
         "[BLE INFO]",
         event.sensor_name,
-        `battery=${event.battery}`,
-        `fw=${event.firmware}`,
-        `product=${event.product}`
+        `battery=${event.telemetry?.battery}`,
+        `fw=${event.telemetry?.firmware}`,
+        `product=${event.telemetry?.product}`
       );
 
       await saveSensorEvent(
