@@ -401,7 +401,7 @@ ${list.map(n => `
 
 <h2>Sensores BLE</h2>
 
-<div id="bleStatus"></div>
+<div id="bleConfig"></div>
 
 <h2>DASHBOARD BLE</h2>
 
@@ -460,11 +460,29 @@ fetch("/api/ble/latest")
       data
     );
 
-    document.getElementById("bleStatus")
-      .innerHTML =
-      "<pre>" +
-      JSON.stringify(data, null, 2) +
-      "</pre>";
+    let bleHtml = "";
+
+    data.forEach(sensor => {
+
+      const name =
+        sensor.payload &&
+        sensor.payload.sensor_name
+          ? sensor.payload.sensor_name
+          : sensor.sensor_id;
+
+      bleHtml +=
+        '<div style="border:1px solid #ddd;border-radius:8px;padding:10px;margin-bottom:8px;background:#fafafa;">' +
+        '<b>' + name + '</b>' +
+        '<div style="margin-top:8px">' +
+        '<label><input type="checkbox" checked> Dashboard</label><br>' +
+        '<label><input type="checkbox" checked> Reporte WhatsApp</label>' +
+        '</div>' +
+        '</div>';
+
+    });
+
+    document.getElementById("bleConfig")
+      .innerHTML = bleHtml;
 
   });
 
