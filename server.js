@@ -468,6 +468,172 @@ fetch("/api/ble/latest")
 
   });
 
+fetch("/api/ble/history")
+.then(r => r.json())
+.then(rows => {
+
+  const visitsPerHour = {};
+  const occupancyDurations = {};
+
+  const sensors = {};
+
+  rows.forEach(r => {
+
+    if (!r.payload?.telemetry) return;
+
+    const sid = r.sensor_id;
+    const tel = r.payload.telemetry;
+
+    if (!sensors[sid]) {
+      sensors[sid] = {
+        lastCount: null,
+        lastOccupied: null,
+        occupiedSince: null
+      };
+    }
+
+    const s = sensors[sid];
+
+    const ts = new Date(r.ts);
+
+    const hourLabel =
+      ts.getHours()
+        .toString()
+        .padStart(2,"0");
+
+    //
+    // VISITAS
+    //
+
+    if (typeof tel.occupy_count === "number") {
+
+      if (s.lastCount !== null) {
+
+        let delta =
+          tel.occupy_count -
+          s.lastCount;
+
+        if (delta < 0)
+          delta += 256;
+
+        if (delta > 0) {
+
+          visitsPerHour[hourLabel] =
+            (visitsPerHour[hourLabel] || 0)
+            + delta;
+
+        }
+
+      }
+
+      s.lastCount =
+        tel.occupy_count;
+    }
+
+    //
+    // TIEMPO DE OCUPACION
+    //
+
+    if (
+      s.lastOccupied === false &&
+      tel.occupied === true
+    ) {
+
+      s.occupiedSince = ts;
+
+    }
+
+    if (
+      s.lastOccupied === true &&
+      tel.occupied === false &&
+      s.occupiedSince
+    ) {
+
+      const mins =
+        (ts - s.occupiedSince)
+        / 60000;
+
+      if (!occupancyDurations[hourLabel]) {
+        occupancyDurations[hourLabel] = [];
+      }
+
+      occupancyDurations[hourLabel]
+        .push(mins);
+
+      s.occupiedSince = null;
+    }
+
+    s.lastOccupied =
+      tel.occupied;
+
+  });
+
+  const labels = [];
+
+  const visits = [];
+
+  const avgTimes = [];
+
+  for (let h=0; h<24; h++) {
+
+    const hh =
+      h.toString()
+       .padStart(2,"0");
+
+    labels.push(hh);
+
+    visits.push(
+      visitsPerHour[hh] || 0
+    );
+
+    const arr =
+      occupancyDurations[hh] || [];
+
+    const avg =
+      arr.length
+      ? arr.reduce((a,b)=>a+b,0)
+        / arr.length
+      : 0;
+
+    avgTimes.push(
+      Number(avg.toFixed(1))
+    );
+  }
+
+  new Chart(
+    document.getElementById("bleChartOcc"),
+    {
+      type:"line",
+      data:{
+        labels,
+        datasets:[
+          {
+            label:"Ocupaciones",
+            data:visits
+          }
+        ]
+      }
+    }
+  );
+
+  new Chart(
+    document.getElementById("bleChartTime"),
+    {
+      type:"line",
+      data:{
+        labels,
+        datasets:[
+          {
+            label:"Minutos",
+            data:avgTimes
+          }
+        ]
+      }
+    }
+  );
+
+});
+
 </script>
 
 <footer>
