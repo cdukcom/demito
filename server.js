@@ -272,6 +272,34 @@ app.get("/api/ble/latest", async (req, res) => {
 
 });
 
+app.get("/api/ble/history", async (req, res) => {
+
+  try {
+
+    const result = await db.query(`
+      SELECT
+        ts,
+        sensor_id,
+        payload
+      FROM sensor_history
+      WHERE event_type='ble_occ'
+      ORDER BY ts ASC
+    `);
+
+    res.json(result.rows);
+
+  } catch(err) {
+
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message
+    });
+
+  }
+
+});
+
 // -------- miniWeb adición y borrado de números Whatsapp ------
 
 app.get("/recipients", requireAdmin, (req, res) => {
@@ -374,6 +402,52 @@ ${list.map(n => `
 <h2>Sensores BLE</h2>
 
 <div id="bleStatus"></div>
+
+<h2>DASHBOARD BLE</h2>
+
+<div style="margin-bottom:10px">
+  Periodo:
+  <select id="blePeriod">
+    <option>Día</option>
+    <option>Semana</option>
+    <option>Mes</option>
+  </select>
+</div>
+
+<div style="
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin-bottom:16px;
+">
+
+  <div style="
+    border:1px solid #ddd;
+    border-radius:8px;
+    padding:10px;
+  ">
+    <b>Ocupaciones por Hora</b>
+    <canvas id="bleChartOcc"></canvas>
+  </div>
+
+  <div style="
+    border:1px solid #ddd;
+    border-radius:8px;
+    padding:10px;
+  ">
+    <b>Tiempo Promedio de Ocupación</b>
+    <canvas id="bleChartTime"></canvas>
+  </div>
+
+</div>
+
+<button id="bleReportBtn">
+  Generar Reporte WhatsApp
+</button>
+
+<br><br>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
 
