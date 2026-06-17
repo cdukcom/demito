@@ -372,21 +372,7 @@ ${list.map(n => `
 
 <h2>Sensores BLE</h2>
 
-<div id="bleStatus">
-
-  <div style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0;">
-    Baño Cuadrado
-  </div>
-
-  <div style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0;">
-    Baño Triángulo
-  </div>
-
-  <div style="padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0;">
-    Baño Estrella
-  </div>
-
-</div>
+<div id="bleStatus"></div>
 
 <script>
 
@@ -398,6 +384,12 @@ fetch("/api/ble/latest")
       "BLE DATA",
       data
     );
+
+    document.getElementById("bleStatus")
+      .innerHTML =
+      "<pre>" +
+      JSON.stringify(data, null, 2) +
+      "</pre>";
 
   });
 
