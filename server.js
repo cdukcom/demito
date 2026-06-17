@@ -490,8 +490,16 @@ fetch("/api/ble/history")
 .then(r => r.json())
 .then(rows => {
 
-  const visitsPerHour = {};
-  const occupancyDurations = {};
+  const visitsPerHour = {
+    "c30000585b9f": {},
+    "c30000585b66": {},
+    "c30000585ba2": {}
+  };
+  const occupancyDurations = {
+    "c30000585b9f": {},
+    "c30000585b66": {},
+    "c30000585ba2": {}
+  };;
 
   const sensors = {};
 
@@ -536,8 +544,8 @@ fetch("/api/ble/history")
 
         if (delta > 0) {
 
-          visitsPerHour[hourLabel] =
-            (visitsPerHour[hourLabel] || 0)
+          visitsPerHour[sid][hourLabel] =
+            (visitsPerHour[sid][hourLabel] || 0)
             + delta;
 
         }
@@ -571,11 +579,11 @@ fetch("/api/ble/history")
         (ts - s.occupiedSince)
         / 60000;
 
-      if (!occupancyDurations[hourLabel]) {
-        occupancyDurations[hourLabel] = [];
+      if (!occupancyDurations[sid][hourLabel]) {
+        occupancyDurations[sid][hourLabel] = [];
       }
 
-      occupancyDurations[hourLabel]
+      occupancyDurations[sid][hourLabel]
         .push(mins);
 
       s.occupiedSince = null;
