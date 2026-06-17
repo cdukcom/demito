@@ -596,35 +596,81 @@ fetch("/api/ble/history")
 
   const labels = [];
 
-  const visits = [];
+  const visitsCuadrado = [];
+  const visitsTriangulo = [];
+  const visitsEstrella = [];
 
-  const avgTimes = [];
+  const avgCuadrado = [];
+  const avgTriangulo = [];
+  const avgEstrella = [];
 
   for (let h=0; h<24; h++) {
 
     const hh =
       h.toString()
-       .padStart(2,"0");
+        .padStart(2,"0");
 
     labels.push(hh);
 
-    visits.push(
-      visitsPerHour[hh] || 0
+    visitsCuadrado.push(
+      visitsPerHour["c30000585b9f"][hh] || 0
     );
 
-    const arr =
-      occupancyDurations[hh] || [];
-
-    const avg =
-      arr.length
-      ? arr.reduce((a,b)=>a+b,0)
-        / arr.length
-      : 0;
-
-    avgTimes.push(
-      Number(avg.toFixed(1))
+    visitsTriangulo.push(
+      visitsPerHour["c30000585b66"][hh] || 0
     );
+
+    visitsEstrella.push(
+      visitsPerHour["c30000585ba2"][hh] || 0
+    );
+
+    const arrC =
+      occupancyDurations["c30000585b9f"][hh] || [];
+
+    const arrT =
+      occupancyDurations["c30000585b66"][hh] || [];
+
+    const arrE =
+      occupancyDurations["c30000585ba2"][hh] || [];
+
+    avgCuadrado.push(
+      arrC.length
+        ? Number(
+            (
+              arrC.reduce((a,b)=>a+b,0)
+              / arrC.length
+            ).toFixed(1)
+          )
+        : 0
+    );
+
+    avgTriangulo.push(
+      arrT.length
+        ? Number(
+            (
+              arrT.reduce((a,b)=>a+b,0)
+              / arrT.length
+            ).toFixed(1)
+          )
+        : 0
+    );
+
+    avgEstrella.push(
+      arrE.length
+        ? Number(
+            (
+              arrE.reduce((a,b)=>a+b,0)
+              / arrE.length
+            ).toFixed(1)
+          )
+        : 0
+    );
+
   }
+  
+  console.log("VISITS CUADRADO", visitsCuadrado);
+  console.log("VISITS TRIANGULO", visitsTriangulo);
+  console.log("VISITS ESTRELLA", visitsEstrella);
 
   new Chart(
     document.getElementById("bleChartOcc"),
@@ -634,8 +680,16 @@ fetch("/api/ble/history")
         labels,
         datasets:[
           {
-            label:"Ocupaciones",
-            data:visits
+            label:"Cuadrado",
+            data:visitsCuadrado
+          },
+          {
+            label:"Triángulo",
+            data:visitsTriangulo
+          },
+          {
+            label:"Estrella",
+            data:visitsEstrella
           }
         ]
       }
@@ -650,8 +704,16 @@ fetch("/api/ble/history")
         labels,
         datasets:[
           {
-            label:"Minutos",
-            data:avgTimes
+            label:"Cuadrado",
+            data:avgCuadrado
+          },
+          {
+            label:"Triángulo",
+            data:avgTriangulo
+          },
+          {
+            label:"Estrella",
+            data:avgEstrella
           }
         ]
       }
