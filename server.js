@@ -254,6 +254,7 @@ app.get("/api/ble/latest", async (req, res) => {
         ts
       FROM sensor_history
       WHERE source='BLE'
+      AND event_type='ble_occ'
       ORDER BY sensor_id, ts DESC
     `);
 
