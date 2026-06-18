@@ -283,6 +283,7 @@ app.get("/api/ble/history", async (req, res) => {
         payload
       FROM sensor_history
       WHERE event_type='ble_occ'
+        AND ts >= NOW() - INTERVAL '24 hours'
       ORDER BY ts ASC
     `);
 
@@ -435,7 +436,7 @@ ${list.map(n => `
     border-radius:8px;
     padding:10px;
   ">
-    <b>Tiempo Promedio de Ocupación</b>
+    <b>Nivel de Utilización (%)</b>
     <canvas id="bleChartTime"></canvas>
   </div>
 
@@ -600,6 +601,10 @@ fetch("/api/ble/history")
   const visitsTriangulo = [];
   const visitsEstrella = [];
 
+  const utilCuadrado = [];
+  const utilTriangulo = [];
+  const utilEstrella = [];
+
   const avgCuadrado = [];
   const avgTriangulo = [];
   const avgEstrella = [];
@@ -622,6 +627,27 @@ fetch("/api/ble/history")
 
     visitsEstrella.push(
       visitsPerHour["c30000585ba2"][hh] || 0
+    );
+    
+    utilCuadrado.push(
+      Math.min(
+        100,
+        (visitsPerHour["c30000585b9f"][hh] || 0) * 10
+      )
+    );
+
+    utilTriangulo.push(
+      Math.min(
+        100,
+        (visitsPerHour["c30000585b66"][hh] || 0) * 10
+      )
+    );
+
+    utilEstrella.push(
+      Math.min(
+        100,
+        (visitsPerHour["c30000585ba2"][hh] || 0) * 10
+      )
     );
 
     const arrC =
@@ -672,6 +698,10 @@ fetch("/api/ble/history")
   console.log("VISITS TRIANGULO", visitsTriangulo);
   console.log("VISITS ESTRELLA", visitsEstrella);
 
+  console.log("UTIL CUADRADO", utilCuadrado);
+  console.log("UTIL TRIANGULO", utilTriangulo);
+  console.log("UTIL ESTRELLA", utilEstrella);
+
   new Chart(
     document.getElementById("bleChartOcc"),
     {
@@ -699,23 +729,32 @@ fetch("/api/ble/history")
   new Chart(
     document.getElementById("bleChartTime"),
     {
-      type:"line",
+      type:"bar",
       data:{
         labels,
         datasets:[
           {
-            label:"Cuadrado",
-            data:avgCuadrado
+            label:"Cuadrado %",
+            data:utilCuadrado
           },
           {
-            label:"Triángulo",
-            data:avgTriangulo
+            label:"Triángulo %",
+            data:utilTriangulo
           },
           {
-            label:"Estrella",
-            data:avgEstrella
+            label:"Estrella %",
+            data:utilEstrella
           }
         ]
+      },
+      options:{
+        responsive:true,
+        scales:{
+          y:{
+            min:0,
+            max:100
+          }
+        }
       }
     }
   );
