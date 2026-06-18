@@ -273,6 +273,17 @@ app.get("/api/ble/latest", async (req, res) => {
 });
 
 app.get("/api/ble/history", async (req, res) => {
+  
+  const range =
+    req.query.range || "day";
+
+  let interval = "24 hours";
+
+  if (range === "week")
+    interval = "7 days";
+
+  if (range === "month")
+    interval = "30 days";
 
   try {
 
@@ -283,7 +294,7 @@ app.get("/api/ble/history", async (req, res) => {
         payload
       FROM sensor_history
       WHERE event_type='ble_occ'
-        AND ts >= NOW() - INTERVAL '24 hours'
+        AND ts >= NOW() - INTERVAL '${interval}'
       ORDER BY ts ASC
     `);
 
@@ -409,9 +420,9 @@ ${list.map(n => `
 <div style="margin-bottom:10px">
   Periodo:
   <select id="blePeriod">
-    <option>Día</option>
-    <option>Semana</option>
-    <option>Mes</option>
+    <option value="day">Día</option>
+    <option value="week">Semana</option>
+    <option value="month">Mes</option>
   </select>
 </div>
 
