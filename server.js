@@ -537,13 +537,37 @@ fetch(
     }
 
     const s = sensors[sid];
+    
+    const period =
+      document.getElementById("blePeriod")?.value ||
+      "day";
 
     const ts = new Date(r.ts);
 
-    const hourLabel =
-      ts.getHours()
-        .toString()
-        .padStart(2,"0");
+    let bucket;
+
+    if (period === "day") {
+
+      bucket =
+        ts.getHours()
+          .toString()
+          .padStart(2,"0");
+
+    }
+    else if (period === "week") {
+
+      bucket =
+        ["Dom","Lun","Mar","Mie","Jue","Vie","Sab"]
+        [ts.getDay()];
+
+    }
+    else {
+
+      bucket =
+        ts.getDate()
+        .toString();
+
+    }
 
     //
     // VISITAS
@@ -562,8 +586,8 @@ fetch(
 
         if (delta > 0) {
 
-          visitsPerHour[sid][hourLabel] =
-            (visitsPerHour[sid][hourLabel] || 0)
+          visitsPerHour[sid][bucket] =
+            (visitsPerHour[sid][bucket] || 0)
             + delta;
 
         }
@@ -597,11 +621,11 @@ fetch(
         (ts - s.occupiedSince)
         / 60000;
 
-      if (!occupancyDurations[sid][hourLabel]) {
-        occupancyDurations[sid][hourLabel] = [];
+      if (!occupancyDurations[sid][bucket]) {
+        occupancyDurations[sid][bucket] = [];
       }
 
-      occupancyDurations[sid][hourLabel]
+      occupancyDurations[sid][bucket]
         .push(mins);
 
       s.occupiedSince = null;
