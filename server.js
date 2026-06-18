@@ -498,7 +498,13 @@ fetch("/api/ble/latest")
 
   });
 
-fetch("/api/ble/history")
+fetch(
+  "/api/ble/history?range=" +
+  (
+    document.getElementById("blePeriod")?.value ||
+    "day"
+  )
+)
 .then(r => r.json())
 .then(rows => {
 
