@@ -802,6 +802,40 @@ fetch(
 
 });
 
+document
+  .getElementById("bleReportBtn")
+  .addEventListener(
+    "click",
+    async () => {
+
+      try {
+
+        const r =
+          await fetch(
+            "/ble/report",
+            {
+              method:"POST"
+            }
+          );
+
+        const j =
+          await r.json();
+
+        alert(
+          j.ok
+            ? "Reporte BLE OK"
+            : ("Error: " + j.error)
+        );
+
+      } catch(err) {
+
+        alert(err.message);
+
+      }
+
+    }
+  );
+
 </script>
 
 <footer>
@@ -884,6 +918,29 @@ app.post("/test/whatsapp", async (req, res) => {
     log("Twilio ERROR test:", err.message);
     res.status(500).json({ ok:false, error: err.message });
   }
+});
+
+// -------- reporte BLE ----------
+app.post("/ble/report", async (req, res) => {
+
+  try {
+
+    console.log("BLE REPORT REQUEST");
+
+    return res.json({
+      ok: true,
+      message: "BLE report endpoint OK"
+    });
+
+  } catch (err) {
+
+    return res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+
+  }
+
 });
 
 // -------- webhook ChirpStack ----------
