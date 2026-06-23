@@ -927,12 +927,82 @@ app.post("/ble/report", async (req, res) => {
 
     console.log("BLE REPORT REQUEST");
 
+    const list = getRecipients();
+
+    if (!twilioClient || !waFrom || list.length === 0) {
+
+      console.log(
+        "BLE REPORT: Twilio no configurado o lista vacía"
+      );
+
+      return res.json({
+        ok: true,
+        warn: "twilio not configured"
+      });
+
+    }
+
+    const text =
+`🚻 DEMITO TEST
+
+Sistema Smart Restroom
+
+Prueba de envío WhatsApp OK`;
+
+    const results = [];
+
+    for (const to of list) {
+
+      try {
+
+        const msg =
+          await twilioClient.messages.create({
+            from: waFrom,
+            to,
+            body: text
+          });
+
+        console.log(
+          "BLE TEST SENT ->",
+          to,
+          msg.sid
+        );
+
+        results.push({
+          to,
+          sid: msg.sid,
+          ok: true
+        });
+
+      } catch (err) {
+
+        console.error(
+          "BLE TEST ERROR ->",
+          to,
+          err.message
+        );
+
+        results.push({
+          to,
+          ok: false,
+          error: err.message
+        });
+
+      }
+
+    }
+
     return res.json({
       ok: true,
-      message: "BLE report endpoint OK"
+      sent: results
     });
 
   } catch (err) {
+
+    console.error(
+      "BLE REPORT ERROR:",
+      err.message
+    );
 
     return res.status(500).json({
       ok: false,
