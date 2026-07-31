@@ -138,41 +138,41 @@ function formatHuman({ event, house, locationName, location, obj }) {
   const temperature = obj?.temperature != null ? `${obj.temperature} °C` : "temperatura";
   const humidity = obj?.humidity != null ? ` y humedad ${obj.humidity} %` : "";
   const actions = {
-    panic: "reporta botón de pánico activado",
-    wall_remove: "reporta desmonte de pared",
-    wall_restore: "reporta restauración en la pared",
-    door_open: "reporta puerta abierta",
-    door_close: "reporta puerta cerrada",
-    temperature: `reporta ${temperature}${humidity}`,
-    high_temperature: `reporta temperatura alta: ${temperature}${humidity}`,
-    gps: "reporta nueva ubicación",
+    panic: "botón de pánico activado",
+    wall_remove: "desmonte de pared",
+    wall_restore: "restauración en la pared",
+    door_open: "puerta abierta",
+    door_close: "puerta cerrada",
+    temperature: `${temperature}${humidity}`,
+    high_temperature: `temperatura alta: ${temperature}${humidity}`,
+    gps: "nueva ubicación",
   };
   const mapLine = (location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude))
     ? `https://maps.google.com/?q=${location.latitude},${location.longitude}` : null;
-  const lines = [
-    `${house} ${actions[event] || `reporta ${event || "un evento"}`}`,
-    nowBogota(),
-    locationName || "Ubicación no configurada",
+  const action = actions[event] || event || "un evento";
+  const timestamp = nowBogota();
+  const place = locationName || "Ubicación no configurada";
+  const map = mapLine || "Mapa no disponible";
+  return {
+    body: [
+    `${house} reporta ${action}`,
+    timestamp,
+    place,
     mapLine,
     "",
     "www.fibersas.com - www.duke-villa.com - 2026",
-  ];
-  return lines.filter(Boolean).join("\n");
+    ].filter(Boolean).join("\n"),
+    variables: { "1": house, "2": action, "3": timestamp, "4": place, "5": map },
+  };
 }
 
-function twilioMessageOptions(to, body) {
+function twilioMessageOptions(to, body, variables = null) {
   const base = { from: waFrom, to };
-  if (!twilioContentSid) return { ...base, body };
-  const lines = body.split("\n").filter(Boolean);
+  if (!twilioContentSid || !variables) return { ...base, body };
   return {
     ...base,
     contentSid: twilioContentSid,
-    contentVariables: JSON.stringify({
-      "1": lines[0] || "Demito reporta un evento",
-      "2": lines[1] || nowBogota(),
-      "3": lines[2] || "Ubicación no configurada",
-      "4": lines[3] || "Mapa no disponible",
-    }),
+    contentVariables: JSON.stringify(variables),
   };
 }
 
@@ -1207,7 +1207,7 @@ app.post("/uplink", async (req, res) => {
     }
 
     // Texto humano (incluye casa por DevEUI y batería si vino del codec)
-    const text = formatHuman({
+    const alert = formatHuman({
       event: finalEvent,
       house: houseName(devEui, devName),
       locationName: cfg?.location,
@@ -1219,7 +1219,7 @@ app.post("/uplink", async (req, res) => {
     const results = [];
     for (const to of list) {
       try {
-        const msg = await twilioClient.messages.create(twilioMessageOptions(to, text));
+        const msg = await twilioClient.messages.create(twilioMessageOptions(to, alert.body, alert.variables));
         log("Twilio OK ->", to, msg.sid);
         results.push({ to, sid: msg.sid, ok:true });
       } catch (err) {
