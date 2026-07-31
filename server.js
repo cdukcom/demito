@@ -388,6 +388,88 @@ app.get("/api/ble/history", requireAdmin, async (req, res) => {
 
 });
 
+function bleRangeConfig(range) {
+  if (range === "week") return { ms:7*86400000, bucketMs:86400000, count:7 };
+  if (range === "month") return { ms:30*86400000, bucketMs:86400000, count:30 };
+  return { ms:24*3600000, bucketMs:3600000, count:24 };
+}
+
+function calculateBleStats(rows, range) {
+  const cfg = bleRangeConfig(range);
+  const end = Date.now();
+  const start = end - cfg.ms;
+  const labels = Array.from({length:cfg.count}, (_, i) => new Date(start + i*cfg.bucketMs).toISOString());
+  const grouped = new Map();
+  for (const row of rows) {
+    if (!row.payload?.telemetry) continue;
+    if (!grouped.has(row.sensor_id)) grouped.set(row.sensor_id, []);
+    grouped.get(row.sensor_id).push(row);
+  }
+  return {
+    range, generatedAt:new Date(end).toISOString(), labels,
+    sensors:Array.from(grouped.entries()).map(([sensorId, samples]) => {
+      samples.sort((a,b) => new Date(a.ts)-new Date(b.ts));
+      const visits = Array(cfg.count).fill(0);
+      const occupiedMs = Array(cfg.count).fill(0);
+      let totalVisits=0, totalOccupiedMs=0, previous=null, sessionStart=null;
+      const durations=[];
+      for (const row of samples) {
+        const ts = new Date(row.ts).getTime();
+        const tel = row.payload.telemetry;
+        const bucket = Math.max(0, Math.min(cfg.count-1, Math.floor((ts-start)/cfg.bucketMs)));
+        if (previous) {
+          if (typeof tel.occupy_count === "number" && typeof previous.tel.occupy_count === "number") {
+            let delta = tel.occupy_count - previous.tel.occupy_count;
+            if (delta < 0) delta += 256;
+            if (delta > 0 && delta <= 100) { visits[bucket] += delta; totalVisits += delta; }
+          }
+          const interval = Math.max(0, Math.min(ts-previous.ts, 45*60000));
+          const fraction = previous.tel.occupied === tel.occupied ? (tel.occupied ? 1 : 0) : 0.5;
+          occupiedMs[bucket] += interval*fraction; totalOccupiedMs += interval*fraction;
+          if (!previous.tel.occupied && tel.occupied) sessionStart = previous.ts + interval/2;
+          if (previous.tel.occupied && !tel.occupied && sessionStart) { durations.push((previous.ts+interval/2)-sessionStart); sessionStart=null; }
+        }
+        previous = { ts, tel };
+      }
+      const last = samples.at(-1);
+      const avgDurationMs = durations.length ? durations.reduce((a,b)=>a+b,0)/durations.length : 0;
+      return {
+        sensorId, name:last.payload?.sensor_name || BLE_DEVICES[sensorId] || sensorId,
+        currentOccupied:Boolean(last.payload?.telemetry?.occupied), lastSeen:last.ts,
+        lowBattery:Boolean(last.payload?.telemetry?.low_battery), dismantle:Boolean(last.payload?.telemetry?.dismantle),
+        totalVisits, occupiedMinutes:Math.round(totalOccupiedMs/60000),
+        utilization:Number((100*totalOccupiedMs/cfg.ms).toFixed(1)),
+        averageDurationMinutes:Number((avgDurationMs/60000).toFixed(1)),
+        visits, utilizationSeries:occupiedMs.map(ms => Number((100*ms/cfg.bucketMs).toFixed(1))),
+      };
+    })
+  };
+}
+
+app.get("/api/ble/stats", requireAdmin, async (req, res) => {
+  const range = ["day","week","month"].includes(req.query.range) ? req.query.range : "day";
+  const cfg = bleRangeConfig(range);
+  try {
+    const result = await db.query(`SELECT ts,sensor_id,payload FROM sensor_history WHERE source='BLE' AND event_type='ble_occ' AND ts >= NOW() - ($1 * INTERVAL '1 millisecond') ORDER BY sensor_id,ts`, [cfg.ms]);
+    res.json(calculateBleStats(result.rows, range));
+  } catch (err) { res.status(500).json({error:err.message}); }
+});
+
+app.get("/api/ble/report.csv", requireAdmin, async (req, res) => {
+  const range = ["day","week","month"].includes(req.query.range) ? req.query.range : "day";
+  const cfg = bleRangeConfig(range);
+  try {
+    const result = await db.query(`SELECT ts,sensor_id,payload FROM sensor_history WHERE source='BLE' AND event_type='ble_occ' AND ts >= NOW() - ($1 * INTERVAL '1 millisecond') ORDER BY sensor_id,ts`, [cfg.ms]);
+    const stats = calculateBleStats(result.rows, range);
+    const quote = value => `"${String(value ?? "").replace(/"/g,'""')}"`;
+    const lines = [["sensor","periodo","ocupaciones","minutos_ocupado","utilizacion_pct","duracion_promedio_min","estado_actual","ultimo_dato"]];
+    for (const sensor of stats.sensors) lines.push([sensor.name,range,sensor.totalVisits,sensor.occupiedMinutes,sensor.utilization,sensor.averageDurationMinutes,sensor.currentOccupied?"ocupado":"libre",sensor.lastSeen]);
+    res.setHeader("Content-Type","text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition",`attachment; filename="demito-ble-${range}.csv"`);
+    res.send("\uFEFF"+lines.map(row=>row.map(quote).join(",")).join("\n"));
+  } catch (err) { res.status(500).send(err.message); }
+});
+
 // -------- miniWeb adición y borrado de números Whatsapp ------
 
 app.get("/recipients", requireUser, (req, res) => {
@@ -485,7 +567,16 @@ ${isAdmin ? `<section class="card"><h2>Sensores BLE</h2>
 
 <div id="bleConfig"></div>
 
-<h2>DASHBOARD BLE</h2>
+<h2>Estadísticas de ocupación</h2>
+<p class="hint">El total usa el contador acumulado del sensor. La hora y duración son estimadas según la frecuencia de reporte del gateway.</p>
+<div class="row-form"><select id="bleStatsPeriod"><option value="day">Últimas 24 horas</option><option value="week">Últimos 7 días</option><option value="month">Últimos 30 días</option></select><button class="btn btn-secondary" id="bleRefreshBtn" type="button">Actualizar</button><a class="btn" id="bleCsvBtn" href="/api/ble/report.csv?range=day">Descargar CSV</a></div>
+<div id="bleStatsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:18px 0"></div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:22px">
+  <div class="card"><h3>Ocupaciones por periodo</h3><canvas id="bleStatsVisits"></canvas></div>
+  <div class="card"><h3>Utilización estimada (%)</h3><canvas id="bleStatsUtil"></canvas></div>
+</div>
+
+<div style="display:none"><h2>DASHBOARD BLE anterior</h2>
 
 <div style="margin-bottom:10px">
   Periodo:
@@ -522,6 +613,7 @@ ${isAdmin ? `<section class="card"><h2>Sensores BLE</h2>
   </div>
 
 </div>
+</div>
 
 <button id="bleReportBtn">
   Generar Reporte WhatsApp
@@ -532,6 +624,34 @@ ${isAdmin ? `<section class="card"><h2>Sensores BLE</h2>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
+
+const BLE_COLORS = ["#ff3b1d", "#2563eb", "#34c759", "#ff9500", "#8b5cf6"];
+let bleVisitsChart = null;
+let bleUtilChart = null;
+function bleLabel(iso, range) { return new Intl.DateTimeFormat("es-CO", range === "day" ? {hour:"2-digit"} : {month:"short",day:"numeric"}).format(new Date(iso)); }
+async function loadBleStats() {
+  const range = document.getElementById("bleStatsPeriod").value;
+  document.getElementById("bleCsvBtn").href = "/api/ble/report.csv?range=" + range;
+  const response = await fetch("/api/ble/stats?range=" + range);
+  const stats = await response.json();
+  if (!response.ok) throw new Error(stats.error || "No fue posible cargar estadísticas");
+  document.getElementById("bleStatsCards").innerHTML = stats.sensors.map(sensor =>
+    '<article class="card" style="margin:0;border-left:4px solid '+(sensor.currentOccupied ? "#ff9500" : "#34c759")+'">'+
+      '<div style="display:flex;justify-content:space-between;gap:8px"><strong>'+sensor.name+'</strong><span class="role-pill">'+(sensor.currentOccupied ? "Ocupado" : "Libre")+'</span></div>'+
+      '<div style="font-size:34px;font-weight:800;margin-top:12px">'+sensor.totalVisits+'</div><div class="hint">ocupaciones</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px"><div><b>'+sensor.utilization+'%</b><div class="hint">utilización</div></div><div><b>'+sensor.averageDurationMinutes+' min</b><div class="hint">duración promedio</div></div></div>'+
+      '<div class="hint" style="margin-top:10px">Último dato: '+new Date(sensor.lastSeen).toLocaleString("es-CO")+(sensor.lowBattery ? " · Batería baja" : "")+(sensor.dismantle ? " · Desmontado" : "")+'</div>'+
+    '</article>').join("") || '<p class="hint">No hay datos BLE en este periodo.</p>';
+  const labels = stats.labels.map(x => bleLabel(x, range));
+  const datasets = stats.sensors.map((s,i) => ({label:s.name,data:s.visits,borderColor:BLE_COLORS[i%BLE_COLORS.length],backgroundColor:BLE_COLORS[i%BLE_COLORS.length],tension:.25}));
+  if (bleVisitsChart) bleVisitsChart.destroy();
+  bleVisitsChart = new Chart(document.getElementById("bleStatsVisits"), {type:"line",data:{labels,datasets},options:{responsive:true,plugins:{legend:{position:"bottom"}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
+  if (bleUtilChart) bleUtilChart.destroy();
+  bleUtilChart = new Chart(document.getElementById("bleStatsUtil"), {type:"bar",data:{labels,datasets:stats.sensors.map((s,i)=>({label:s.name,data:s.utilizationSeries,backgroundColor:BLE_COLORS[i%BLE_COLORS.length]}))},options:{responsive:true,plugins:{legend:{position:"bottom"}},scales:{y:{beginAtZero:true,max:100}}}});
+}
+document.getElementById("bleStatsPeriod").addEventListener("change", loadBleStats);
+document.getElementById("bleRefreshBtn").addEventListener("click", loadBleStats);
+loadBleStats().catch(err => document.getElementById("bleStatsCards").innerHTML='<p class="hint">'+err.message+'</p>');
 
 fetch("/api/ble/latest")
   .then(r => r.json())
