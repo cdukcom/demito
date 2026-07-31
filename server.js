@@ -293,7 +293,7 @@ function requireAdmin(req, res, next) {
 }
 
 app.get("/", (req, res) => res.redirect(readSession(req) ? "/recipients" : "/login"));
-app.get("/login", (req, res) => res.type("html").send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demito — Ingreso</title><style>${FACIL_STYLES}</style></head><body><main class="login-page"><section class="login-card"><img src="/static/logo-facil-iot.png" alt="Facil IoT" class="login-logo"><h1>Demito</h1><p>Monitoreo sencillo de sensores LoRaWAN y BLE, con la experiencia visual de Facil IoT.</p><form class="login-form" method="post" action="/login"><input name="username" autocomplete="username" placeholder="Usuario" required><input name="password" type="password" autocomplete="current-password" placeholder="Contraseña" required><button class="btn" type="submit">Ingresar</button></form><div class="login-footer">Powered by DukeVilla · Facil IoT</div></section></main></body></html>`));
+app.get("/login", (req, res) => res.type("html").send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demito — Ingreso</title><link rel="icon" href="/static/favicon.ico" type="image/x-icon"><style>${FACIL_STYLES}</style></head><body><main class="login-page"><section class="login-card"><img src="/static/logo-facil-iot.png" alt="Facil IoT" class="login-logo"><h1>Demito</h1><p>Monitoreo sencillo de sensores LoRaWAN y BLE, con la experiencia visual de Facil IoT.</p><form class="login-form" method="post" action="/login"><input name="username" autocomplete="username" placeholder="Usuario" required><input name="password" type="password" autocomplete="current-password" placeholder="Contraseña" required><button class="btn" type="submit">Ingresar</button></form><div class="login-footer">Powered by DukeVilla · Facil IoT</div></section></main></body></html>`));
 app.post("/login", (req, res) => {
   const username = String(req.body?.username || "").trim();
   const account = USERS[username];
@@ -390,6 +390,7 @@ app.get("/recipients", requireUser, (req, res) => {
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"/>
 <title>Destinatarios WhatsApp — ${BRAND.product}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon"/>
 <style>${FACIL_STYLES}</style></head><body><div class="page">
 
 <header class="topbar">
