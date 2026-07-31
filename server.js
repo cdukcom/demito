@@ -15,13 +15,22 @@ const twilioContentSid = process.env.TWILIO_CONTENT_SID || "";
 // --- Destinatarios separados por rol ---
 const ALWAYS_ON = new Set(["whatsapp:+573134991467"]); // fijo por código
 const recipientsByRole = {
-  admin: new Set((process.env.WHATSAPP_TO_ADMIN || process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean)),
-  guest: new Set((process.env.WHATSAPP_TO_GUEST || "").split(",").map(s => s.trim()).filter(Boolean)),
+  admin: new Map((process.env.WHATSAPP_TO_ADMIN || process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean).map(phone => [phone, { enabled:true }])),
+  guest: new Map((process.env.WHATSAPP_TO_GUEST || "").split(",").map(s => s.trim()).filter(Boolean).map(phone => [phone, { enabled:true }])),
 };
 
 function getRecipients(role) {
-  const scoped = recipientsByRole[role] || new Set();
-  return Array.from(new Set([...ALWAYS_ON, ...scoped]));
+  const scoped = recipientsByRole[role] || new Map();
+  const active = Array.from(scoped.entries()).filter(([, record]) => record.enabled !== false).map(([phone]) => phone);
+  return Array.from(new Set([...ALWAYS_ON, ...active]));
+}
+
+function getRecipientRecords(role) {
+  const scoped = recipientsByRole[role] || new Map();
+  return [
+    ...Array.from(ALWAYS_ON).map(phone => ({ phone, enabled:true, fixed:true })),
+    ...Array.from(scoped.entries()).filter(([phone]) => !ALWAYS_ON.has(phone)).map(([phone, record]) => ({ phone, ...record, fixed:false })),
+  ];
 }
 
 // Secreto opcional para el webhook. La miniWeb usa login + cookie de sesión.
@@ -384,9 +393,8 @@ app.get("/api/ble/history", requireAdmin, async (req, res) => {
 app.get("/recipients", requireUser, (req, res) => {
   const isAdmin = req.user.role === "admin";
   const currentRole = req.user.role;
-  const list = getRecipients(req.user.role);
+  const list = getRecipientRecords(req.user.role);
   const tokenQS = "";
-  const fixed = new Set(ALWAYS_ON);
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"/>
 <title>Destinatarios WhatsApp — ${BRAND.product}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -410,13 +418,17 @@ app.get("/recipients", requireUser, (req, res) => {
 <p class="hint">Acepta: <code>whatsapp:+57...</code>, <code>+57...</code> o celular de 10 dígitos (asume +57).</p>
 
 <h2>Actuales</h2>
-${list.map(n => `
+${list.map(recipient => `
   <div class="chip">
-    <div><strong>${n}</strong> ${fixed.has(n) ? '<small>(fijo)</small>' : ''}</div>
-    ${fixed.has(n) ? '' : `
+    <div><strong>${recipient.phone}</strong> ${recipient.fixed ? '<small>(fijo y activo)</small>' : `<small>${recipient.enabled ? "activo" : "deshabilitado"}</small>`}</div>
+    ${recipient.fixed ? '' : `
+      <form method="POST" action="/recipients/toggle">
+        <input type="hidden" name="to" value="${recipient.phone}">
+        <button class="btn btn-secondary" type="submit">${recipient.enabled ? "Deshabilitar" : "Activar"}</button>
+      </form>
       <form method="POST" action="/recipients/remove${tokenQS}">
-        <input type="hidden" name="to" value="${n}">
-        <button class="btn btn-danger" type="submit">Quitar</button>
+        <input type="hidden" name="to" value="${recipient.phone}">
+        <button class="btn btn-danger" type="submit" onclick="return confirm('¿Eliminar definitivamente este número?')">Eliminar</button>
       </form>
     `}
   </div>
@@ -424,7 +436,8 @@ ${list.map(n => `
 
 <h2>Agregar</h2>
 <form class="row-form" method="POST" action="/recipients/add${tokenQS}">
-  <input name="to" type="text" placeholder="whatsapp:+57..., +57..., 313..." required>
+  <div style="flex:1"><input name="to" type="text" placeholder="whatsapp:+57..., +57..., 313..." required>
+  <label class="hint" style="display:flex;gap:8px;align-items:flex-start;margin-top:10px"><input name="consent" type="checkbox" required style="width:auto;min-height:auto;margin-top:2px"> Autorizo recibir por WhatsApp alertas de seguridad, apertura, temperatura y emergencia generadas por Demito.</label></div>
   <button class="btn" type="submit">Agregar</button>
 </form>
 <p class="hint">Esta lista pertenece únicamente a <b>${req.user.username}</b>. El número fijo de soporte se incluye siempre.</p>
@@ -912,12 +925,32 @@ app.post("/recipients/add", requireUser, async (req, res) => {
   const raw = req.body?.to || "";
   const norm = normalizeWhatsApp(raw);
   if (!norm) return res.status(400).send("Número no válido");
-  if (!ALWAYS_ON.has(norm)) recipientsByRole[req.user.role].add(norm);
+  if (req.body?.consent !== "on") return res.status(400).send("Debes aceptar la autorización de WhatsApp");
+  const record = { enabled:true, consentAt:new Date().toISOString(), consentVersion:"demito-whatsapp-v1", createdBy:req.user.username };
+  if (!ALWAYS_ON.has(norm)) recipientsByRole[req.user.role].set(norm, record);
   try {
-    if (!ALWAYS_ON.has(norm)) await db.query(`INSERT INTO whatsapp_recipients (role, phone) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [req.user.role, norm]);
+    if (!ALWAYS_ON.has(norm)) await db.query(`
+      INSERT INTO whatsapp_recipients (role, phone, enabled, consent_at, consent_version, created_by, updated_at)
+      VALUES ($1,$2,TRUE,NOW(),'demito-whatsapp-v1',$3,NOW())
+      ON CONFLICT (role, phone) DO UPDATE SET enabled=TRUE, consent_at=NOW(), consent_version='demito-whatsapp-v1', created_by=$3, updated_at=NOW()
+    `, [req.user.role, norm, req.user.username]);
+    await auditLog(req, "recipient_added", "whatsapp_recipient", norm, { role:req.user.role, consentVersion:"demito-whatsapp-v1" });
     log("Recipient ADD:", req.user.role, norm);
     res.redirect("/recipients");
   } catch (err) { res.status(500).send("No se pudo guardar el destinatario"); }
+});
+
+app.post("/recipients/toggle", requireUser, async (req, res) => {
+  const to = normalizeWhatsApp(req.body?.to);
+  const record = to && recipientsByRole[req.user.role].get(to);
+  if (!to || !record) return res.status(404).send("Número no está en tu lista");
+  if (ALWAYS_ON.has(to)) return res.status(400).send("El número fijo siempre debe estar activo");
+  record.enabled = !record.enabled;
+  try {
+    await db.query(`UPDATE whatsapp_recipients SET enabled=$1, updated_at=NOW() WHERE role=$2 AND phone=$3`, [record.enabled, req.user.role, to]);
+    await auditLog(req, record.enabled ? "recipient_enabled" : "recipient_disabled", "whatsapp_recipient", to, { role:req.user.role });
+    res.redirect("/recipients");
+  } catch (err) { record.enabled = !record.enabled; res.status(500).send("No se pudo actualizar el destinatario"); }
 });
 
 app.post("/recipients/remove", requireUser, async (req, res) => {
@@ -929,6 +962,7 @@ app.post("/recipients/remove", requireUser, async (req, res) => {
   recipientsByRole[req.user.role].delete(to);
   try {
     await db.query(`DELETE FROM whatsapp_recipients WHERE role=$1 AND phone=$2`, [req.user.role, to]);
+    await auditLog(req, "recipient_deleted", "whatsapp_recipient", `***${to.slice(-4)}`, { role:req.user.role, phoneLast4:to.slice(-4) });
     log("Recipient DEL:", req.user.role, to);
     res.redirect("/recipients");
   } catch (err) { res.status(500).send("No se pudo quitar el destinatario"); }
@@ -971,6 +1005,7 @@ app.post("/sensors/update", requireUser, async (req, res) => {
           threshold=EXCLUDED.threshold, location=EXCLUDED.location, owner_role=EXCLUDED.owner_role, updated_at=NOW()
       `, [dev, HOUSE_MAP[dev], cfg.enabled, cfg.lat, cfg.lng, cfg.threshold ?? null, cfg.location || "", cfg.ownerRole]);
     }));
+    await auditLog(req, "sensor_settings_updated", "sensor_settings", req.user.role, { role:req.user.role, sensorCount:allowedSensors.length });
     log("SENSOR CONFIG UPDATED", SENSOR_CONFIG);
     res.redirect("/recipients");
   } catch (err) {
@@ -1508,10 +1543,38 @@ async function initDatabase() {
     CREATE TABLE IF NOT EXISTS whatsapp_recipients (
       role TEXT NOT NULL CHECK (role IN ('admin', 'guest')),
       phone TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      consent_at TIMESTAMPTZ,
+      consent_version TEXT,
+      created_by TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (role, phone)
     );
   `);
+
+  await db.query(`ALTER TABLE whatsapp_recipients ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE`);
+  await db.query(`ALTER TABLE whatsapp_recipients ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ`);
+  await db.query(`ALTER TABLE whatsapp_recipients ADD COLUMN IF NOT EXISTS consent_version TEXT`);
+  await db.query(`ALTER TABLE whatsapp_recipients ADD COLUMN IF NOT EXISTS created_by TEXT`);
+  await db.query(`ALTER TABLE whatsapp_recipients ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      username TEXT,
+      role TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ip_address TEXT
+    );
+  `);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_sensor_history_sensor_ts ON sensor_history (sensor_id, ts DESC)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_sensor_history_event_ts ON sensor_history (event_type, ts DESC)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log (ts DESC)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log (role, username, ts DESC)`);
 
   const settings = await db.query(`SELECT sensor_id, name, enabled, lat, lng, threshold, location, owner_role FROM sensor_settings`);
   for (const row of settings.rows) {
@@ -1524,11 +1587,25 @@ async function initDatabase() {
     };
   }
 
-  const savedRecipients = await db.query(`SELECT role, phone FROM whatsapp_recipients`);
-  for (const row of savedRecipients.rows) recipientsByRole[row.role]?.add(row.phone);
+  const savedRecipients = await db.query(`SELECT role, phone, enabled, consent_at, consent_version, created_by FROM whatsapp_recipients`);
+  for (const row of savedRecipients.rows) recipientsByRole[row.role]?.set(row.phone, {
+    enabled:row.enabled, consentAt:row.consent_at, consentVersion:row.consent_version, createdBy:row.created_by,
+  });
 
-  log("sensor_history + sensor_settings + whatsapp_recipients OK");
+  log("sensor history, settings, recipients and audit log OK");
 
+}
+
+async function auditLog(req, action, entityType, entityId, details = {}) {
+  try {
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    await db.query(`
+      INSERT INTO audit_log (username, role, action, entity_type, entity_id, details, ip_address)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `, [req.user?.username || null, req.user?.role || null, action, entityType, entityId || null, details, ip || null]);
+  } catch (err) {
+    log("AUDIT LOG ERROR", err.message);
+  }
 }
 
 /*
