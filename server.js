@@ -3,24 +3,35 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const mqtt = require("mqtt");
 const { Pool } = require("pg");
+const crypto = require("crypto");
 
 // --- Twilio ---
-const twilioSid   = process.env.TWILIO_SID;
-const twilioToken = process.env.TWILIO_TOKEN;
-const waFrom      = process.env.WHATSAPP_FROM;
+const twilioSid   = process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_SID;
+const twilioToken = process.env.TWILIO_AUTH_TOKEN || process.env.TWILIO_TOKEN;
+const waFromRaw   = process.env.WHATSAPP_FROM || "";
+const waFrom      = waFromRaw && waFromRaw.startsWith("whatsapp:") ? waFromRaw : (waFromRaw ? `whatsapp:${waFromRaw}` : "");
+const twilioContentSid = process.env.TWILIO_CONTENT_SID || "";
 
-// --- Destinatarios dinámicos (en memoria) ---
+// --- Destinatarios separados por rol ---
 const ALWAYS_ON = new Set(["whatsapp:+573134991467"]); // fijo por código
-const waToInit = (process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean);
-const recipients = new Set([...waToInit, ...ALWAYS_ON]);
+const recipientsByRole = {
+  admin: new Set((process.env.WHATSAPP_TO_ADMIN || process.env.WHATSAPP_TO || "").split(",").map(s => s.trim()).filter(Boolean)),
+  guest: new Set((process.env.WHATSAPP_TO_GUEST || "").split(",").map(s => s.trim()).filter(Boolean)),
+};
 
-function getRecipients() {
-  return Array.from(new Set([...ALWAYS_ON, ...recipients]));
+function getRecipients(role) {
+  const scoped = recipientsByRole[role] || new Set();
+  return Array.from(new Set([...ALWAYS_ON, ...scoped]));
 }
 
-// Secreto opcional para el webhook y miniWeb
+// Secreto opcional para el webhook. La miniWeb usa login + cookie de sesión.
 const hookSecret  = process.env.WEBHOOK_SECRET || "";
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
+const SESSION_SECRET = process.env.SESSION_SECRET || "demito-2026-change-in-production";
+const USERS = Object.freeze({
+  invitado: { password: "Duk3vi114", role: "guest" },
+  admin: { password: "T@b0g02026", role: "admin" },
+});
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 // Banner y pie de pagina miniWeb
 const BRAND = {
@@ -32,13 +43,12 @@ const BRAND = {
   logoPath: "/static/dukevilla-logo.jpg", 
 };
 
-// Firma corta para WhatsApp (líneas al final)
-const BRAND_SIGNATURE = [
-  `— ${BRAND.product}`,
-  `Desarrollado por ${BRAND.company} — ${BRAND.year}`,
-  `${BRAND.url} | ${BRAND.email}`,
-].join("\n");
-
+const FACIL_STYLES = `
+  :root{--background:#f5f5f7;--surface:#fff;--surface-secondary:#fafafa;--text:#111827;--text-light:#6b7280;--border:rgba(0,0,0,.08);--accent:#ff3b1d;--accent-dark:#e42d10;--primary:#2563eb;--success:#34c759;--danger:#ff3b30;--shadow:0 10px 30px rgba(0,0,0,.06);--radius:18px}
+  *{box-sizing:border-box}body{margin:0;background:var(--background);color:var(--text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}a{color:inherit}button,input,select{font:inherit}button{border:0;cursor:pointer;transition:.25s ease}.page{width:min(1400px,calc(100% - 32px));margin:24px auto 50px}.topbar{position:sticky;top:12px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 18px;background:rgba(255,255,255,.9);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.6);border-radius:22px;box-shadow:var(--shadow)}.brand{display:flex;align-items:center;gap:14px}.brand img{width:116px;height:56px;object-fit:contain}.brand-title{font-size:20px;font-weight:800}.brand-tag,.hint{color:var(--text-light);font-size:13px}.userbox{display:flex;align-items:center;gap:10px}.role-pill,.owner-badge{display:inline-flex;padding:6px 10px;border-radius:999px;background:#eaf2ff;color:var(--primary);font-size:12px;font-weight:700}.hero{padding:38px 4px 20px}.hero h1{margin:0 0 8px;font-size:clamp(30px,5vw,46px);line-height:1.05}.hero p{margin:0;color:var(--text-light);font-size:17px}.grid{display:grid;grid-template-columns:minmax(280px,.72fr) minmax(0,2fr);gap:22px;align-items:start}.card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:22px;box-shadow:var(--shadow);margin-bottom:22px}.card h2{margin:0 0 8px;font-size:20px}.card h3{margin:20px 0 8px}.chip{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--border);background:var(--surface-secondary);border-radius:14px;padding:10px 12px;margin:8px 0}.row-form{display:flex;gap:8px;margin:12px 0}.field,input:not([type=checkbox]),select{width:100%;min-height:44px;padding:9px 12px;border:1px solid var(--border);background:#fff;border-radius:12px;outline:none;transition:.25s ease}input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(255,59,29,.08)}input:disabled{background:#eef0f3;color:#8b95a5}.btn{padding:11px 16px;border-radius:12px;background:var(--accent);color:#fff;font-weight:700}.btn:hover{background:var(--accent-dark);transform:translateY(-1px)}.btn-secondary{background:#111827}.btn-danger{background:var(--danger)}.sensor{display:grid;grid-template-columns:28px minmax(190px,1.2fr) minmax(180px,1fr) auto;gap:10px;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}.sensor:last-child{border-bottom:0}.sensor-meta{grid-column:2/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.coords{display:flex;gap:8px;align-items:center}.coords input{width:110px!important}.savebar{display:flex;justify-content:flex-end;padding-top:18px}footer{padding:20px 4px;color:var(--text-light);font-size:12px}.login-page{min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 15% 10%,rgba(255,59,29,.12),transparent 34%),var(--background)}.login-card{width:min(480px,100%);background:rgba(255,255,255,.88);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.5);border-radius:36px;padding:48px;box-shadow:0 30px 80px rgba(0,0,0,.08)}.login-logo{width:230px;height:110px;object-fit:contain;margin:0 auto 24px;display:block}.login-card h1{text-align:center;font-size:42px;margin:0 0 12px}.login-card p{text-align:center;color:var(--text-light);line-height:1.6}.login-form{display:flex;flex-direction:column;gap:14px;margin-top:28px}.login-form input{height:60px;border-radius:18px;padding:0 20px}.login-form .btn{height:60px;border-radius:18px}.login-footer{text-align:center;margin-top:26px;color:var(--text-light);font-size:13px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}.sensor{grid-template-columns:28px 1fr}.sensor>*:not(input[type=checkbox]){grid-column:2}.sensor-meta{grid-column:2}.topbar{position:static}.brand-tag{display:none}}
+  @media(max-width:560px){.page{width:min(100% - 20px,1400px);margin-top:10px}.topbar{align-items:flex-start}.brand img{width:78px}.userbox{flex-direction:column;align-items:flex-end}.card{padding:17px;border-radius:18px}.row-form{flex-direction:column}.login-card{padding:30px 22px;border-radius:26px}.login-card h1{font-size:34px}}
+`;
 
 // --- Mapa de casas (DevEUI en minúsculas) ---
 const HOUSE_MAP = {
@@ -62,9 +72,15 @@ const HOUSE_MAP = {
   "ffffff100004cb45": "Rastreo GPS Equipo Triángulo",
 };
 
+const GUEST_SENSOR_IDS = new Set([
+  "ffffff100004f737", "ffffff100004f73f", "ffffff100004f749",
+  "ffffff1000053192", "ffffff10000531a2", "ffffff1000053199",
+  "ffffff10000507dc", "ffffff1000051827", "ffffff100005181a",
+]);
+
 // --- Estado de sensores (on/off + coordenadas) ---
 const SENSOR_CONFIG = {
-  "ffffff100004f737": { enabled: false, lat: 4.718681, lng: -74.037496 },
+  "ffffff100004f737": { enabled: false, lat: 4.718681, lng: -74.037496, location: "" },
   "ffffff100004f73f": { enabled: false, lat: 4.718681, lng: -74.037496 },
   "ffffff100004f749": { enabled: false, lat: 4.718681, lng: -74.037496 },
 
@@ -99,6 +115,10 @@ function normalizeWhatsApp(input) {
   return "whatsapp:" + s;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
+}
+
 // --- Anti-duplicados para pánico (por devEUI) ---
 const PANIC_TTL_MS = 30 * 1000;
 const lastPanic = new Map(); // devEui -> { t: ms, fCnt }
@@ -114,45 +134,46 @@ function allowPanic(devEui, fCnt) {
 }
 
 // Mensaje humano
-function formatHuman({ event, house, devName, devEui, fCnt, battery_mv, location, obj }) {
-  let title, tipo;
-  if (event === "panic")       { title = "🚨 *Alerta de Pánico*";        tipo = "Botón de Pánico"; }
-  else if (event === "wall_remove") { title = "⚠️ *Alerta: Desmonte de Pared*"; tipo = "Desmonte de Pared"; }
-  else if (event === "wall_restore"){ title = "✅ *Restaurado en la Pared*";     tipo = "Restaurado"; }
-  else if (event === "low_battery"){ title = "🔋 *Batería baja*";              tipo = "Batería baja"; }
-  else if (event === "door_open") { title = "🚪 *Puerta Abierta*";        tipo = "Apertura"; }
-  else if (event === "door_close") { title = "🚪 *Puerta Cerrada*";        tipo = "Cierre"; }
-  else if (event === "temperature") { title = "🌡️ *Temperatura / Humedad*";        tipo = "Ambiental"; }
-  else if (event === "gps") { title = "📍 *Ubicación GPS*";        tipo = "Rastreo"; }
-  else if (event === "high_temperature") { title = "🔥 *ALERTA: Temperatura Alta*";       tipo = "Temperatura crítica"; }
-  else                            { title = "ℹ️ Evento";                       tipo = event || "N/A"; }
-
-  const mapLine = (location && typeof location.latitude === "number" && typeof location.longitude === "number")
-    ? `Ubicación aprox.: https://maps.google.com/?q=${location.latitude},${location.longitude}`
-    : null;
-  
-  const extra = [];
-
-  if (obj?.temperature != null) extra.push(`Temperatura: ${obj.temperature} °C`);
-  if (obj?.humidity != null) extra.push(`Humedad: ${obj.humidity} %`);
-  if (obj?.latitude != null && obj?.longitude != null) {
-    extra.push(`GPS: ${obj.latitude}, ${obj.longitude}`);
-  }
-  
+function formatHuman({ event, house, locationName, location, obj }) {
+  const temperature = obj?.temperature != null ? `${obj.temperature} °C` : "temperatura";
+  const humidity = obj?.humidity != null ? ` y humedad ${obj.humidity} %` : "";
+  const actions = {
+    panic: "reporta botón de pánico activado",
+    wall_remove: "reporta desmonte de pared",
+    wall_restore: "reporta restauración en la pared",
+    door_open: "reporta puerta abierta",
+    door_close: "reporta puerta cerrada",
+    temperature: `reporta ${temperature}${humidity}`,
+    high_temperature: `reporta temperatura alta: ${temperature}${humidity}`,
+    gps: "reporta nueva ubicación",
+  };
+  const mapLine = (location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude))
+    ? `https://maps.google.com/?q=${location.latitude},${location.longitude}` : null;
   const lines = [
-    title,
-    `Lugar: *${house}*`,
-    `Tipo: ${tipo}`,
-    `Dispositivo: *${devName}* (${devEui})`,
-    ...extra,
-    (typeof fCnt === "number") ? `Frame: ${fCnt}` : null,
-    (typeof battery_mv === "number") ? `Batería: ${(battery_mv/1000).toFixed(2)} V` : null,
+    `${house} ${actions[event] || `reporta ${event || "un evento"}`}`,
+    nowBogota(),
+    locationName || "Ubicación no configurada",
     mapLine,
-    `Hora: ${nowBogota()} (Bogotá)`,
-    "",           // separador visual
-    BRAND_SIGNATURE,  // ← firma DUKEVILLA
+    "",
+    "www.fibersas.com - www.duke-villa.com - 2026",
   ];
   return lines.filter(Boolean).join("\n");
+}
+
+function twilioMessageOptions(to, body) {
+  const base = { from: waFrom, to };
+  if (!twilioContentSid) return { ...base, body };
+  const lines = body.split("\n").filter(Boolean);
+  return {
+    ...base,
+    contentSid: twilioContentSid,
+    contentVariables: JSON.stringify({
+      "1": lines[0] || "Demito reporta un evento",
+      "2": lines[1] || nowBogota(),
+      "3": lines[2] || "Ubicación no configurada",
+      "4": lines[3] || "Mapa no disponible",
+    }),
+  };
 }
 
 // Resolver evento desde el codec nuevo (o compatibilidad vieja)
@@ -220,6 +241,39 @@ app.use(bodyParser.json({ limit: "1mb" }));
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use("/static", express.static("public", { maxAge: "1d", etag: true }));
 
+function parseCookies(req) {
+  return Object.fromEntries(String(req.headers.cookie || "").split(";").map(v => v.trim()).filter(Boolean).map(v => {
+    const i = v.indexOf("=");
+    return [decodeURIComponent(v.slice(0, i)), decodeURIComponent(v.slice(i + 1))];
+  }));
+}
+
+function signSession(username, role, expires) {
+  const payload = Buffer.from(JSON.stringify({ username, role, expires })).toString("base64url");
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function readSession(req) {
+  const token = parseCookies(req).demito_session;
+  if (!token) return null;
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString());
+    return session.expires > Date.now() ? session : null;
+  } catch { return null; }
+}
+
+function requireUser(req, res, next) {
+  req.user = readSession(req);
+  if (req.user) return next();
+  if (req.path.startsWith("/api/") || req.method !== "GET") return res.status(401).json({ ok:false, error:"unauthorized" });
+  return res.redirect("/login");
+}
+
 // util: hora local Bogotá
 function nowBogota() {
   return new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
@@ -233,16 +287,29 @@ function log(...args) {
 // ------ Acceso MiniWeb seguro -----
 
 function requireAdmin(req, res, next) {
-  if (!ADMIN_TOKEN) return next();
-  const t = req.query.token || req.body?.token || req.get("x-admin-token");
-  if (t === ADMIN_TOKEN) return next();
-  return res.status(401).send("Unauthorized");
+  req.user = readSession(req);
+  if (req.user?.role === "admin") return next();
+  return res.status(req.user ? 403 : 401).send("No autorizado");
 }
+
+app.get("/", (req, res) => res.redirect(readSession(req) ? "/recipients" : "/login"));
+app.get("/login", (req, res) => res.type("html").send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demito — Ingreso</title><style>${FACIL_STYLES}</style></head><body><main class="login-page"><section class="login-card"><img src="/static/logo-facil-iot.png" alt="Facil IoT" class="login-logo"><h1>Demito</h1><p>Monitoreo sencillo de sensores LoRaWAN y BLE, con la experiencia visual de Facil IoT.</p><form class="login-form" method="post" action="/login"><input name="username" autocomplete="username" placeholder="Usuario" required><input name="password" type="password" autocomplete="current-password" placeholder="Contraseña" required><button class="btn" type="submit">Ingresar</button></form><div class="login-footer">Powered by DukeVilla · Facil IoT</div></section></main></body></html>`));
+app.post("/login", (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const account = USERS[username];
+  const supplied = Buffer.from(String(req.body?.password || ""));
+  const expected = Buffer.from(account?.password || "invalid-password");
+  if (!account || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return res.status(401).send("Usuario o contraseña incorrectos. <a href=\"/login\">Volver</a>");
+  const token = signSession(username, account.role, Date.now() + SESSION_TTL_MS);
+  res.setHeader("Set-Cookie", `demito_session=${token}; Max-Age=${SESSION_TTL_MS / 1000}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+  res.redirect("/recipients");
+});
+app.post("/logout", (req, res) => { res.setHeader("Set-Cookie", "demito_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax"); res.redirect("/login"); });
 
 // -------- health ----------
 app.get("/health", (_, res) => res.send("ok"));
 
-app.get("/api/ble/latest", async (req, res) => {
+app.get("/api/ble/latest", requireAdmin, async (req, res) => {
 
   try {
 
@@ -272,7 +339,7 @@ app.get("/api/ble/latest", async (req, res) => {
 
 });
 
-app.get("/api/ble/history", async (req, res) => {
+app.get("/api/ble/history", requireAdmin, async (req, res) => {
   
   const range =
     req.query.range || "day";
@@ -314,40 +381,31 @@ app.get("/api/ble/history", async (req, res) => {
 
 // -------- miniWeb adición y borrado de números Whatsapp ------
 
-app.get("/recipients", requireAdmin, (req, res) => {
-  const list = getRecipients();
-  const tokenQS = ADMIN_TOKEN ? `?token=${encodeURIComponent(ADMIN_TOKEN)}` : "";
+app.get("/recipients", requireUser, (req, res) => {
+  const isAdmin = req.user.role === "admin";
+  const currentRole = req.user.role;
+  const list = getRecipients(req.user.role);
+  const tokenQS = "";
   const fixed = new Set(ALWAYS_ON);
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"/>
 <title>Destinatarios WhatsApp — ${BRAND.product}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<style>
-  :root { --gold:#b89b58; --ink:#111; }
-  body{font-family:system-ui,Segoe UI,Arial;max-width:820px;margin:24px auto;padding:0 16px}
-  header.brand{display:flex;align-items:center;gap:12px;margin-bottom:12px}
-  header.brand img{height:44px;border-radius:6px}
-  header.brand .title{font-weight:700;font-size:18px}
-  header.brand .tag{font-size:12px;opacity:.8}
-  h1{font-size:20px;margin:12px 0}
-  .chip{display:flex;justify-content:space-between;align-items:center;border:1px solid #ddd;border-radius:10px;padding:8px 12px;margin:6px 0}
-  button{padding:8px 12px;border:0;background:var(--ink);color:#fff;border-radius:8px;cursor:pointer}
-  button.danger{background:#b00020}
-  input[type=text]{flex:1;padding:8px 10px;border:1px solid #ccc;border-radius:8px}
-  form{display:flex;gap:8px;margin:12px 0}
-  .hint{font-size:12px;opacity:.8}
-  footer{margin-top:28px;padding-top:12px;border-top:1px dashed #ddd;font-size:12px;opacity:.8}
-  a{color:var(--ink);text-decoration:none;border-bottom:1px solid rgba(0,0,0,.2)}
-</style></head><body>
+<style>${FACIL_STYLES}</style></head><body><div class="page">
 
-<header class="brand">
-  <img src="${BRAND.logoPath}" alt="Logo DukeVilla">
-  <div>
-    <div class="title">${BRAND.product}</div>
-    <div class="tag">Data Transmission & Signal Processing</div>
+<header class="topbar">
+  <div class="brand">
+    <img src="/static/logo-facil-iot.png" alt="Facil IoT">
+    <div>
+      <div class="brand-title">Demito</div>
+      <div class="brand-tag">Sensores conectados por Facil IoT</div>
+    </div>
   </div>
+  <div class="userbox"><span class="role-pill">${isAdmin ? "Administrador" : "Invitado"}</span><form method="POST" action="/logout"><button class="btn btn-secondary" type="submit">Salir</button></form></div>
 </header>
 
-<h1>Destinatarios de WhatsApp</h1>
+<section class="hero"><h1>Panel Demito</h1><p>Configura alertas y sensores para <b>${req.user.username}</b>.</p></section>
+<div class="grid"><aside class="card">
+<h2>Destinatarios WhatsApp</h2>
 <p class="hint">Acepta: <code>whatsapp:+57...</code>, <code>+57...</code> o celular de 10 dígitos (asume +57).</p>
 
 <h2>Actuales</h2>
@@ -356,62 +414,60 @@ ${list.map(n => `
     <div><strong>${n}</strong> ${fixed.has(n) ? '<small>(fijo)</small>' : ''}</div>
     ${fixed.has(n) ? '' : `
       <form method="POST" action="/recipients/remove${tokenQS}">
-        ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
         <input type="hidden" name="to" value="${n}">
-        <button class="danger" type="submit">Quitar</button>
+        <button class="btn btn-danger" type="submit">Quitar</button>
       </form>
     `}
   </div>
 `).join("") || "<p>(vacío)</p>"}
 
 <h2>Agregar</h2>
-<form method="POST" action="/recipients/add${tokenQS}">
-  ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
+<form class="row-form" method="POST" action="/recipients/add${tokenQS}">
   <input name="to" type="text" placeholder="whatsapp:+57..., +57..., 313..." required>
-  <button type="submit">Agregar</button>
+  <button class="btn" type="submit">Agregar</button>
 </form>
+<p class="hint">Esta lista pertenece únicamente a <b>${req.user.username}</b>. El número fijo de soporte se incluye siempre.</p>
+</aside><main class="card">
 
-<h2>Activar Sensores</h2>
+<h2>Sensores</h2><p class="hint">Activa un sensor para asignarlo a este usuario. Los sensores en uso por el otro rol aparecen bloqueados.</p>
 
 <form method="POST" action="/sensors/update${tokenQS}" style="display:block;width:100%;">
-  ${ADMIN_TOKEN ? `<input type="hidden" name="token" value="${ADMIN_TOKEN}">` : ""}
-
-  ${Object.entries(HOUSE_MAP).map(([dev, name]) => {
+  ${Object.entries(HOUSE_MAP).filter(([dev]) => isAdmin || GUEST_SENSOR_IDS.has(dev)).map(([dev, name]) => {
     const cfg = SENSOR_CONFIG[dev] || {};
+    const locked = cfg.ownerRole && cfg.ownerRole !== currentRole;
     const nameLower = name.toLowerCase();
     const isTemp = nameLower.includes("temperatura");
     const isGPS  = nameLower.includes("gps");
     return `
-      <div style="display:flex;align-items:center;gap:12px;margin:8px 0;padding-bottom:6px;border-bottom:1px dashed #ddd;">
+      <div class="sensor">
     
-        <input type="checkbox" name="enabled_${dev}" ${cfg.enabled ? "checked" : ""}>
+        <input type="checkbox" name="enabled_${dev}" ${cfg.enabled ? "checked" : ""} ${locked ? "disabled" : ""}>
     
-        <label style="min-width:300px;font-weight:600">
-          ${name}
-        </label>
+        <input name="name_${dev}" value="${escapeHtml(name)}" aria-label="Nombre del sensor" style="min-width:260px;font-weight:600" ${locked ? "disabled" : ""}>
 
-        ${!isGPS ? `
-          <span style="font-size:12px;opacity:0.7;margin-left:10px">
-            Coordenadas:
-          </span>
-          <input name="lat_${dev}" value="${cfg.lat || ""}" style="width:90px;text-align:center">
-          <input name="lng_${dev}" value="${cfg.lng || ""}" style="width:90px;text-align:center">
-        ` : ``}
+        <input name="location_${dev}" value="${escapeHtml(cfg.location || "")}" placeholder="Ubicación (ej. Bodega norte)" style="min-width:210px" ${locked ? "disabled" : ""}>
+        ${locked ? `<span class="owner-badge">En uso por ${cfg.ownerRole === "admin" ? "admin" : "invitado"}</span>` : ""}
+
+        <div class="sensor-meta">
+        ${!isGPS ? `<div class="coords"><span class="hint">Coordenadas:</span>
+          <input name="lat_${dev}" value="${cfg.lat || ""}" style="width:90px;text-align:center" ${locked ? "disabled" : ""}>
+          <input name="lng_${dev}" value="${cfg.lng || ""}" style="width:90px;text-align:center" ${locked ? "disabled" : ""}>
+        </div>` : ``}
 
         ${isTemp ? `
-          <span style="font-size:12px;opacity:0.7;margin-left:10px">
-            Umbral (°C):
-          </span>
-          <input name="threshold_${dev}" value="${cfg.threshold ?? 45}" style="width:70px;text-align:center">
+          <span class="hint">Umbral (°C):</span>
+          <input name="threshold_${dev}" value="${cfg.threshold ?? 45}" style="width:70px;text-align:center" ${locked ? "disabled" : ""}>
         ` : ``}
+        </div>
       </div>
     `;
   }).join("")}
 
-  <button type="submit">Actualizar configuración sensor</button>
+  <div class="savebar"><button class="btn" type="submit">Guardar configuración</button></div>
 </form>
+</main></div>
 
-<h2>Sensores BLE</h2>
+${isAdmin ? `<section class="card"><h2>Sensores BLE</h2>
 
 <div id="bleConfig"></div>
 
@@ -837,6 +893,7 @@ document
   );
 
 </script>
+</section>` : ""}
 
 <footer>
   <div>Desarrollado por ${BRAND.company} — ${BRAND.year}</div>
@@ -844,64 +901,90 @@ document
       <a href="mailto:${BRAND.email}">${BRAND.email}</a></div>
 </footer>
 
-</body></html>`;
+</div></body></html>`;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.send(html);
 });
 
-app.post("/recipients/add", requireAdmin, (req, res) => {
+app.post("/recipients/add", requireUser, async (req, res) => {
   const raw = req.body?.to || "";
   const norm = normalizeWhatsApp(raw);
   if (!norm) return res.status(400).send("Número no válido");
-  recipients.add(norm);
-  log("Recipient ADD:", norm);
-  const back = ADMIN_TOKEN ? `/recipients?token=${encodeURIComponent(ADMIN_TOKEN)}` : "/recipients";
-  res.redirect(back);
+  if (!ALWAYS_ON.has(norm)) recipientsByRole[req.user.role].add(norm);
+  try {
+    if (!ALWAYS_ON.has(norm)) await db.query(`INSERT INTO whatsapp_recipients (role, phone) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [req.user.role, norm]);
+    log("Recipient ADD:", req.user.role, norm);
+    res.redirect("/recipients");
+  } catch (err) { res.status(500).send("No se pudo guardar el destinatario"); }
 });
 
-app.post("/recipients/remove", requireAdmin, (req, res) => {
+app.post("/recipients/remove", requireUser, async (req, res) => {
   const raw = String(req.body?.to || "");
   const to = raw.startsWith("whatsapp:") ? raw : normalizeWhatsApp(raw);
   if (!to) return res.status(400).send("Número no válido");
   if (ALWAYS_ON.has(to)) return res.status(400).send("No se puede quitar el número fijo");
-  if (!recipients.has(to)) return res.status(404).send("Número no está en la lista");
-  recipients.delete(to);
-  log("Recipient DEL:", to);
-  const back = ADMIN_TOKEN ? `/recipients?token=${encodeURIComponent(ADMIN_TOKEN)}` : "/recipients";
-  res.redirect(back);
+  if (!recipientsByRole[req.user.role].has(to)) return res.status(404).send("Número no está en tu lista");
+  recipientsByRole[req.user.role].delete(to);
+  try {
+    await db.query(`DELETE FROM whatsapp_recipients WHERE role=$1 AND phone=$2`, [req.user.role, to]);
+    log("Recipient DEL:", req.user.role, to);
+    res.redirect("/recipients");
+  } catch (err) { res.status(500).send("No se pudo quitar el destinatario"); }
 });
 
-app.post("/sensors/update", requireAdmin, (req, res) => {
-  Object.keys(HOUSE_MAP).forEach(dev => {
+app.post("/sensors/update", requireUser, async (req, res) => {
+  const allowedSensors = Object.keys(HOUSE_MAP).filter(dev => req.user.role === "admin" || GUEST_SENSOR_IDS.has(dev));
+  allowedSensors.forEach(dev => {
+    const existing = SENSOR_CONFIG[dev] || {};
+    if (existing.ownerRole && existing.ownerRole !== req.user.role) return;
     const enabled = req.body[`enabled_${dev}`] === "on";
     const lat = parseFloat(req.body[`lat_${dev}`]);
     const lng = parseFloat(req.body[`lng_${dev}`]);
     const threshold = parseFloat(req.body[`threshold_${dev}`]);
+    const name = String(req.body[`name_${dev}`] || "").trim().slice(0, 100);
+    const location = String(req.body[`location_${dev}`] || "").trim().slice(0, 180);
 
-    const prev = SENSOR_CONFIG[dev] || {};
+    const prev = existing;
+
+    if (name) HOUSE_MAP[dev] = name;
 
     SENSOR_CONFIG[dev] = {
       enabled,
       lat: isNaN(lat) ? prev.lat : lat,
       lng: isNaN(lng) ? prev.lng : lng,
       threshold: isNaN(threshold) ? (prev.threshold ?? 45) : threshold,
+      location,
+      ownerRole: enabled ? req.user.role : null,
     };
   });
 
-  log("SENSOR CONFIG UPDATED", SENSOR_CONFIG);
-
-  const back = ADMIN_TOKEN ? `/recipients?token=${encodeURIComponent(ADMIN_TOKEN)}` : "/recipients";
-  res.redirect(back);
+  try {
+    await Promise.all(allowedSensors.filter(dev => !SENSOR_CONFIG[dev].ownerRole || SENSOR_CONFIG[dev].ownerRole === req.user.role).map(dev => {
+      const cfg = SENSOR_CONFIG[dev];
+      return db.query(`
+        INSERT INTO sensor_settings (sensor_id, name, enabled, lat, lng, threshold, location, owner_role, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        ON CONFLICT (sensor_id) DO UPDATE SET
+          name=EXCLUDED.name, enabled=EXCLUDED.enabled, lat=EXCLUDED.lat, lng=EXCLUDED.lng,
+          threshold=EXCLUDED.threshold, location=EXCLUDED.location, owner_role=EXCLUDED.owner_role, updated_at=NOW()
+      `, [dev, HOUSE_MAP[dev], cfg.enabled, cfg.lat, cfg.lng, cfg.threshold ?? null, cfg.location || "", cfg.ownerRole]);
+    }));
+    log("SENSOR CONFIG UPDATED", SENSOR_CONFIG);
+    res.redirect("/recipients");
+  } catch (err) {
+    log("SENSOR CONFIG SAVE ERROR", err.message);
+    res.status(500).send("No se pudo guardar la configuración");
+  }
 });
 
 // -------- prueba Twilio ----------
-app.post("/test/whatsapp", async (req, res) => {
+app.post("/test/whatsapp", requireAdmin, async (req, res) => {
   try {
     if (!twilioClient) {
       return res.status(500).json({ ok:false, error: "Twilio no está configurado (TWILIO_SID/TWILIO_TOKEN)" });
     }
-    const to = (req.body?.to || getRecipients()[0] || "").trim();
+    const to = (req.body?.to || getRecipients("admin")[0] || "").trim();
     const msgBody = req.body?.body || "Mensaje de prueba ✅";
 
     if (!to || !to.startsWith("whatsapp:")) {
@@ -911,7 +994,7 @@ app.post("/test/whatsapp", async (req, res) => {
       return res.status(400).json({ ok:false, error: "Falta WHATSAPP_FROM" });
     }
 
-    const msg = await twilioClient.messages.create({ from: waFrom, to, body: msgBody });
+    const msg = await twilioClient.messages.create(twilioMessageOptions(to, msgBody));
     log("Twilio OK test ->", to, msg.sid);
     res.json({ ok: true, sid: msg.sid });
   } catch (err) {
@@ -921,13 +1004,13 @@ app.post("/test/whatsapp", async (req, res) => {
 });
 
 // -------- reporte BLE ----------
-app.post("/ble/report", async (req, res) => {
+app.post("/ble/report", requireAdmin, async (req, res) => {
 
   try {
 
     console.log("BLE REPORT REQUEST");
 
-    const list = getRecipients();
+    const list = getRecipients("admin");
 
     if (!twilioClient || !waFrom || list.length === 0) {
 
@@ -956,11 +1039,7 @@ Prueba de envío WhatsApp OK`;
       try {
 
         const msg =
-          await twilioClient.messages.create({
-            from: waFrom,
-            to,
-            body: text
-          });
+          await twilioClient.messages.create(twilioMessageOptions(to, text));
 
         console.log(
           "BLE TEST SENT ->",
@@ -1099,7 +1178,7 @@ app.post("/uplink", async (req, res) => {
     }
 
     // Verificación Twilio
-    const list = getRecipients();
+    const list = getRecipients(cfg.ownerRole || "admin");
     if (!twilioClient || !waFrom || list.length === 0) {
       log("No se envía WhatsApp: falta TWILIO_SID/TWILIO_TOKEN/WHATSAPP_FROM o lista vacía");
       return res.json({ ok:true, warn:"twilio not configured" });
@@ -1130,19 +1209,16 @@ app.post("/uplink", async (req, res) => {
     const text = formatHuman({
       event: finalEvent,
       house: houseName(devEui, devName),
-      devName,
-      devEui,
-      fCnt,
-      battery_mv: obj?.battery_mv,
+      locationName: cfg?.location,
       location,
-      obj
+      obj,
     });
 
     // Envío a todos los destinatarios
     const results = [];
     for (const to of list) {
       try {
-        const msg = await twilioClient.messages.create({ from: waFrom, to, body: text });
+        const msg = await twilioClient.messages.create(twilioMessageOptions(to, text));
         log("Twilio OK ->", to, msg.sid);
         results.push({ to, sid: msg.sid, ok:true });
       } catch (err) {
@@ -1411,7 +1487,46 @@ async function initDatabase() {
 
   `);
 
-  log("sensor_history OK");
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS sensor_settings (
+      sensor_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      threshold DOUBLE PRECISION,
+      location TEXT NOT NULL DEFAULT '',
+      owner_role TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await db.query(`ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS owner_role TEXT`);
+  await db.query(`UPDATE sensor_settings SET owner_role='admin' WHERE enabled=TRUE AND owner_role IS NULL`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_recipients (
+      role TEXT NOT NULL CHECK (role IN ('admin', 'guest')),
+      phone TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (role, phone)
+    );
+  `);
+
+  const settings = await db.query(`SELECT sensor_id, name, enabled, lat, lng, threshold, location, owner_role FROM sensor_settings`);
+  for (const row of settings.rows) {
+    const dev = String(row.sensor_id).toLowerCase();
+    if (!HOUSE_MAP[dev]) continue;
+    HOUSE_MAP[dev] = row.name || HOUSE_MAP[dev];
+    SENSOR_CONFIG[dev] = {
+      ...(SENSOR_CONFIG[dev] || {}), enabled: row.enabled, lat: row.lat, lng: row.lng,
+      threshold: row.threshold ?? SENSOR_CONFIG[dev]?.threshold, location: row.location || "", ownerRole: row.owner_role || null,
+    };
+  }
+
+  const savedRecipients = await db.query(`SELECT role, phone FROM whatsapp_recipients`);
+  for (const row of savedRecipients.rows) recipientsByRole[row.role]?.add(row.phone);
+
+  log("sensor_history + sensor_settings + whatsapp_recipients OK");
 
 }
 
