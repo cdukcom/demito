@@ -10,6 +10,8 @@ const twilioSid   = process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_SID;
 const twilioToken = process.env.TWILIO_AUTH_TOKEN || process.env.TWILIO_TOKEN;
 const waFromRaw   = process.env.WHATSAPP_FROM || "";
 const waFrom      = waFromRaw && waFromRaw.startsWith("whatsapp:") ? waFromRaw : (waFromRaw ? `whatsapp:${waFromRaw}` : "");
+const waSandboxFromRaw = process.env.WHATSAPP_SANDBOX_FROM || "+14155238886";
+const waSandboxFrom = waSandboxFromRaw.startsWith("whatsapp:") ? waSandboxFromRaw : `whatsapp:${waSandboxFromRaw}`;
 const twilioContentSid = process.env.TWILIO_CONTENT_SID || "";
 
 // --- Destinatarios separados por rol ---
@@ -176,7 +178,8 @@ function formatHuman({ event, house, community, locationName, location, obj }) {
   };
 }
 
-function twilioMessageOptions(to, body, variables = null) {
+function twilioMessageOptions(to, body, variables = null, role = "admin") {
+  if (role === "guest") return { from: waSandboxFrom, to, body };
   const base = { from: waFrom, to };
   if (!twilioContentSid || !variables) return { ...base, body };
   return {
@@ -1351,9 +1354,11 @@ app.post("/uplink", async (req, res) => {
     }
 
     // Verificación Twilio
-    const list = getRecipients(cfg.ownerRole || "admin");
-    if (!twilioClient || !waFrom || list.length === 0) {
-      log("No se envía WhatsApp: falta TWILIO_SID/TWILIO_TOKEN/WHATSAPP_FROM o lista vacía");
+    const ownerRole = cfg.ownerRole || "admin";
+    const list = getRecipients(ownerRole);
+    const channelFrom = ownerRole === "guest" ? waSandboxFrom : waFrom;
+    if (!twilioClient || !channelFrom || list.length === 0) {
+      log("No se envía WhatsApp: falta configuración Twilio/remitente o lista vacía");
       return res.json({ ok:true, warn:"twilio not configured" });
     }
     
@@ -1382,7 +1387,7 @@ app.post("/uplink", async (req, res) => {
     const alert = formatHuman({
       event: finalEvent,
       house: houseName(devEui, devName),
-      community: COMMUNITIES[cfg.ownerRole || "admin"],
+      community: COMMUNITIES[ownerRole],
       locationName: cfg?.location,
       location,
       obj,
@@ -1392,8 +1397,8 @@ app.post("/uplink", async (req, res) => {
     const results = [];
     for (const to of list) {
       try {
-        const msg = await twilioClient.messages.create(twilioMessageOptions(to, alert.body, alert.variables));
-        log("Twilio OK ->", to, msg.sid);
+        const msg = await twilioClient.messages.create(twilioMessageOptions(to, alert.body, alert.variables, ownerRole));
+        log(`Twilio OK (${ownerRole === "guest" ? "sandbox" : "production"}) ->`, to, msg.sid);
         results.push({ to, sid: msg.sid, ok:true });
       } catch (err) {
         log("Twilio ERROR ->", to, err.message);
