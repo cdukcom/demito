@@ -40,6 +40,7 @@ const USERS = Object.freeze({
   invitado: { password: "Duk3vi114", role: "guest" },
   admin: { password: "T@b0g02026", role: "admin" },
 });
+const COMMUNITIES = { guest: "Invitado", admin: "Admin" };
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 // Banner y pie de pagina miniWeb
@@ -54,7 +55,7 @@ const BRAND = {
 
 const FACIL_STYLES = `
   :root{--background:#f5f5f7;--surface:#fff;--surface-secondary:#fafafa;--text:#111827;--text-light:#6b7280;--border:rgba(0,0,0,.08);--accent:#ff3b1d;--accent-dark:#e42d10;--primary:#2563eb;--success:#34c759;--danger:#ff3b30;--shadow:0 10px 30px rgba(0,0,0,.06);--radius:18px}
-  *{box-sizing:border-box}body{margin:0;background:var(--background);color:var(--text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}a{color:inherit}button,input,select{font:inherit}button{border:0;cursor:pointer;transition:.25s ease}.page{width:min(1400px,calc(100% - 32px));margin:24px auto 50px}.topbar{position:sticky;top:12px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 18px;background:rgba(255,255,255,.9);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.6);border-radius:22px;box-shadow:var(--shadow)}.brand{display:flex;align-items:center;gap:14px}.brand img{width:116px;height:56px;object-fit:contain}.brand-title{font-size:20px;font-weight:800}.brand-tag,.hint{color:var(--text-light);font-size:13px}.userbox{display:flex;align-items:center;gap:10px}.role-pill,.owner-badge{display:inline-flex;padding:6px 10px;border-radius:999px;background:#eaf2ff;color:var(--primary);font-size:12px;font-weight:700}.hero{padding:38px 4px 20px}.hero h1{margin:0 0 8px;font-size:clamp(30px,5vw,46px);line-height:1.05}.hero p{margin:0;color:var(--text-light);font-size:17px}.grid{display:grid;grid-template-columns:minmax(280px,.72fr) minmax(0,2fr);gap:22px;align-items:start}.card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:22px;box-shadow:var(--shadow);margin-bottom:22px}.card h2{margin:0 0 8px;font-size:20px}.card h3{margin:20px 0 8px}.chip{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--border);background:var(--surface-secondary);border-radius:14px;padding:10px 12px;margin:8px 0}.row-form{display:flex;gap:8px;margin:12px 0}.field,input:not([type=checkbox]),select{width:100%;min-height:44px;padding:9px 12px;border:1px solid var(--border);background:#fff;border-radius:12px;outline:none;transition:.25s ease}input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(255,59,29,.08)}input:disabled{background:#eef0f3;color:#8b95a5}.btn{padding:11px 16px;border-radius:12px;background:var(--accent);color:#fff;font-weight:700}.btn:hover{background:var(--accent-dark);transform:translateY(-1px)}.btn-secondary{background:#111827}.btn-danger{background:var(--danger)}.sensor{display:grid;grid-template-columns:28px minmax(190px,1.2fr) minmax(180px,1fr) auto;gap:10px;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}.sensor:last-child{border-bottom:0}.sensor-meta{grid-column:2/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.coords{display:flex;gap:8px;align-items:center}.coords input{width:110px!important}.savebar{display:flex;justify-content:flex-end;padding-top:18px}footer{padding:20px 4px;color:var(--text-light);font-size:12px}.login-page{min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 15% 10%,rgba(255,59,29,.12),transparent 34%),var(--background)}.login-card{width:min(480px,100%);background:rgba(255,255,255,.88);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.5);border-radius:36px;padding:48px;box-shadow:0 30px 80px rgba(0,0,0,.08)}.login-logo{width:230px;height:110px;object-fit:contain;margin:0 auto 24px;display:block}.login-card h1{text-align:center;font-size:42px;margin:0 0 12px}.login-card p{text-align:center;color:var(--text-light);line-height:1.6}.login-form{display:flex;flex-direction:column;gap:14px;margin-top:28px}.login-form input{height:60px;border-radius:18px;padding:0 20px}.login-form .btn{height:60px;border-radius:18px}.login-footer{text-align:center;margin-top:26px;color:var(--text-light);font-size:13px}
+  *{box-sizing:border-box}body{margin:0;background:var(--background);color:var(--text);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}a{color:inherit}button,input,select{font:inherit}button{border:0;cursor:pointer;transition:.25s ease}.page{width:min(1400px,calc(100% - 32px));margin:24px auto 50px}.topbar{position:sticky;top:12px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 18px;background:rgba(255,255,255,.9);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.6);border-radius:22px;box-shadow:var(--shadow)}.brand{display:flex;align-items:center;gap:14px}.brand img{width:116px;height:56px;object-fit:contain}.brand-title{font-size:20px;font-weight:800}.brand-tag,.hint{color:var(--text-light);font-size:13px}.userbox{display:flex;align-items:center;gap:10px}.role-pill,.owner-badge{display:inline-flex;padding:6px 10px;border-radius:999px;background:#eaf2ff;color:var(--primary);font-size:12px;font-weight:700}.hero{padding:38px 4px 20px}.hero h1{margin:0 0 8px;font-size:clamp(30px,5vw,46px);line-height:1.05}.hero p{margin:0;color:var(--text-light);font-size:17px}.grid{display:grid;grid-template-columns:minmax(280px,.72fr) minmax(0,2fr);gap:22px;align-items:start}.card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:22px;box-shadow:var(--shadow);margin-bottom:22px}.card h2{margin:0 0 8px;font-size:20px}.card h3{margin:20px 0 8px}.chip{display:flex;flex-direction:column;align-items:stretch;gap:10px;border:1px solid var(--border);background:var(--surface-secondary);border-radius:14px;padding:12px;margin:8px 0}.recipient-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.recipient-actions form{margin:0}.recipient-actions .btn{width:100%}.row-form{display:flex;gap:8px;margin:12px 0}.recipient-add-form{display:flex;flex-direction:column;gap:10px}.recipient-add-form .btn{width:100%}.community-form{display:flex;flex-direction:column;gap:8px;margin:12px 0 20px}.field,input:not([type=checkbox]),select{width:100%;min-height:44px;padding:9px 12px;border:1px solid var(--border);background:#fff;border-radius:12px;outline:none;transition:.25s ease}input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(255,59,29,.08)}input:disabled{background:#eef0f3;color:#8b95a5}.btn{padding:11px 16px;border-radius:12px;background:var(--accent);color:#fff;font-weight:700}.btn:hover{background:var(--accent-dark);transform:translateY(-1px)}.btn-secondary{background:#111827}.btn-danger{background:var(--danger)}.sensor{display:grid;grid-template-columns:28px minmax(190px,1.2fr) minmax(180px,1fr) auto;gap:10px;align-items:center;padding:14px 0;border-bottom:1px solid var(--border)}.sensor:last-child{border-bottom:0}.sensor-meta{grid-column:2/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.coords{display:flex;gap:8px;align-items:center}.coords input{width:110px!important}.savebar{display:flex;justify-content:flex-end;padding-top:18px}footer{padding:20px 4px;color:var(--text-light);font-size:12px}.login-page{min-height:100vh;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 15% 10%,rgba(255,59,29,.12),transparent 34%),var(--background)}.login-card{width:min(480px,100%);background:rgba(255,255,255,.88);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.5);border-radius:36px;padding:48px;box-shadow:0 30px 80px rgba(0,0,0,.08)}.login-logo{width:230px;height:110px;object-fit:contain;margin:0 auto 24px;display:block}.login-card h1{text-align:center;font-size:42px;margin:0 0 12px}.login-card p{text-align:center;color:var(--text-light);line-height:1.6}.login-form{display:flex;flex-direction:column;gap:14px;margin-top:28px}.login-form input{height:60px;border-radius:18px;padding:0 20px}.login-form .btn{height:60px;border-radius:18px}.login-footer{text-align:center;margin-top:26px;color:var(--text-light);font-size:13px}
   @media(max-width:900px){.grid{grid-template-columns:1fr}.sensor{grid-template-columns:28px 1fr}.sensor>*:not(input[type=checkbox]){grid-column:2}.sensor-meta{grid-column:2}.topbar{position:static}.brand-tag{display:none}}
   @media(max-width:560px){.page{width:min(100% - 20px,1400px);margin-top:10px}.topbar{align-items:flex-start}.brand img{width:78px}.userbox{flex-direction:column;align-items:flex-end}.card{padding:17px;border-radius:18px}.row-form{flex-direction:column}.login-card{padding:30px 22px;border-radius:26px}.login-card h1{font-size:34px}}
 `;
@@ -143,7 +144,7 @@ function allowPanic(devEui, fCnt) {
 }
 
 // Mensaje humano
-function formatHuman({ event, house, locationName, location, obj }) {
+function formatHuman({ event, house, community, locationName, location, obj }) {
   const temperature = obj?.temperature != null ? `${obj.temperature} °C` : "temperatura";
   const humidity = obj?.humidity != null ? ` y humedad ${obj.humidity} %` : "";
   const actions = {
@@ -164,14 +165,14 @@ function formatHuman({ event, house, locationName, location, obj }) {
   const map = mapLine || "Mapa no disponible";
   return {
     body: [
-    `${house} reporta ${action}`,
+    `${community} - ${house} reporta ${action}`,
     timestamp,
     place,
     mapLine,
     "",
     "www.fibersas.com - www.duke-villa.com - 2026",
     ].filter(Boolean).join("\n"),
-    variables: { "1": house, "2": action, "3": timestamp, "4": place, "5": map },
+    variables: { "1": `${community} - ${house}`, "2": action, "3": timestamp, "4": place, "5": map },
   };
 }
 
@@ -496,6 +497,11 @@ app.get("/recipients", requireUser, (req, res) => {
 
 <section class="hero"><h1>Panel Demito</h1><p>Configura alertas y sensores para <b>${req.user.username}</b>.</p></section>
 <div class="grid"><aside class="card">
+<h2>Comunidad</h2>
+<form class="community-form" method="POST" action="/community/update">
+  <input name="community" maxlength="80" value="${escapeHtml(COMMUNITIES[currentRole])}" placeholder="Nombre de la comunidad" required>
+  <button class="btn" type="submit">Guardar comunidad</button>
+</form>
 <h2>Destinatarios WhatsApp</h2>
 <p class="hint">Acepta: <code>whatsapp:+57...</code>, <code>+57...</code> o celular de 10 dígitos (asume +57).</p>
 
@@ -503,7 +509,7 @@ app.get("/recipients", requireUser, (req, res) => {
 ${list.map(recipient => `
   <div class="chip">
     <div><strong>${recipient.phone}</strong> ${recipient.fixed ? '<small>(fijo y activo)</small>' : `<small>${recipient.enabled ? "activo" : "deshabilitado"}</small>`}</div>
-    ${recipient.fixed ? '' : `
+    ${recipient.fixed ? '' : `<div class="recipient-actions">
       <form method="POST" action="/recipients/toggle">
         <input type="hidden" name="to" value="${recipient.phone}">
         <button class="btn btn-secondary" type="submit">${recipient.enabled ? "Deshabilitar" : "Activar"}</button>
@@ -512,12 +518,12 @@ ${list.map(recipient => `
         <input type="hidden" name="to" value="${recipient.phone}">
         <button class="btn btn-danger" type="submit" onclick="return confirm('¿Eliminar definitivamente este número?')">Eliminar</button>
       </form>
-    `}
+    </div>`}
   </div>
 `).join("") || "<p>(vacío)</p>"}
 
 <h2>Agregar</h2>
-<form class="row-form" method="POST" action="/recipients/add${tokenQS}">
+<form class="recipient-add-form" method="POST" action="/recipients/add${tokenQS}">
   <div style="flex:1"><input name="to" type="text" placeholder="whatsapp:+57..., +57..., 313..." required>
   <label class="hint" style="display:flex;gap:8px;align-items:flex-start;margin-top:10px"><input name="consent" type="checkbox" required style="width:auto;min-height:auto;margin-top:2px"> Autorizo recibir por WhatsApp alertas de seguridad, apertura, temperatura y emergencia generadas por Demito.</label></div>
   <button class="btn" type="submit">Agregar</button>
@@ -1041,6 +1047,17 @@ document
   res.send(html);
 });
 
+app.post("/community/update", requireUser, async (req, res) => {
+  const name = String(req.body?.community || "").trim().slice(0, 80);
+  if (!name) return res.status(400).send("Nombre de comunidad requerido");
+  try {
+    await db.query(`INSERT INTO role_settings (role, community_name, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (role) DO UPDATE SET community_name=EXCLUDED.community_name, updated_at=NOW()`, [req.user.role, name]);
+    COMMUNITIES[req.user.role] = name;
+    await auditLog(req, "community_updated", "role_settings", req.user.role, { community:name });
+    res.redirect("/recipients");
+  } catch (err) { res.status(500).send("No se pudo guardar la comunidad"); }
+});
+
 app.post("/recipients/add", requireUser, async (req, res) => {
   const raw = req.body?.to || "";
   const norm = normalizeWhatsApp(raw);
@@ -1365,6 +1382,7 @@ app.post("/uplink", async (req, res) => {
     const alert = formatHuman({
       event: finalEvent,
       house: houseName(devEui, devName),
+      community: COMMUNITIES[cfg.ownerRole || "admin"],
       locationName: cfg?.location,
       location,
       obj,
@@ -1660,6 +1678,14 @@ async function initDatabase() {
   await db.query(`ALTER TABLE sensor_settings ADD COLUMN IF NOT EXISTS owner_role TEXT`);
   await db.query(`UPDATE sensor_settings SET owner_role='admin' WHERE enabled=TRUE AND owner_role IS NULL`);
   await db.query(`
+    CREATE TABLE IF NOT EXISTS role_settings (
+      role TEXT PRIMARY KEY CHECK (role IN ('admin','guest')),
+      community_name TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await db.query(`INSERT INTO role_settings (role, community_name) VALUES ('admin','Admin'),('guest','Invitado') ON CONFLICT (role) DO NOTHING`);
+  await db.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_recipients (
       role TEXT NOT NULL CHECK (role IN ('admin', 'guest')),
       phone TEXT NOT NULL,
@@ -1706,6 +1732,9 @@ async function initDatabase() {
       threshold: row.threshold ?? SENSOR_CONFIG[dev]?.threshold, location: row.location || "", ownerRole: row.owner_role || null,
     };
   }
+
+  const roleSettings = await db.query(`SELECT role, community_name FROM role_settings`);
+  for (const row of roleSettings.rows) COMMUNITIES[row.role] = row.community_name;
 
   const savedRecipients = await db.query(`SELECT role, phone, enabled, consent_at, consent_version, created_by FROM whatsapp_recipients`);
   for (const row of savedRecipients.rows) recipientsByRole[row.role]?.set(row.phone, {
