@@ -4,15 +4,12 @@ const bodyParser = require("body-parser");
 const mqtt = require("mqtt");
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const { createWhatsAppConfig } = require("./whatsapp-config");
 
 // --- Twilio ---
 const twilioSid   = process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_SID;
 const twilioToken = process.env.TWILIO_AUTH_TOKEN || process.env.TWILIO_TOKEN;
-const waFromRaw   = process.env.WHATSAPP_FROM || "";
-const waFrom      = waFromRaw && waFromRaw.startsWith("whatsapp:") ? waFromRaw : (waFromRaw ? `whatsapp:${waFromRaw}` : "");
-const waSandboxFromRaw = process.env.WHATSAPP_SANDBOX_FROM || "+14155238886";
-const waSandboxFrom = waSandboxFromRaw.startsWith("whatsapp:") ? waSandboxFromRaw : `whatsapp:${waSandboxFromRaw}`;
-const twilioContentSid = process.env.TWILIO_CONTENT_SID || "";
+const whatsappConfig = createWhatsAppConfig(process.env);
 
 // --- Destinatarios separados por rol ---
 const ALWAYS_ON = new Set(["whatsapp:+573134991467"]); // fijo por código
@@ -179,14 +176,7 @@ function formatHuman({ event, house, community, locationName, location, obj }) {
 }
 
 function twilioMessageOptions(to, body, variables = null, role = "admin") {
-  if (role === "guest") return { from: waSandboxFrom, to, body };
-  const base = { from: waFrom, to };
-  if (!twilioContentSid || !variables) return { ...base, body };
-  return {
-    ...base,
-    contentSid: twilioContentSid,
-    contentVariables: JSON.stringify(variables),
-  };
+  return whatsappConfig.messageOptions(to, body, variables, role);
 }
 
 // Resolver evento desde el codec nuevo (o compatibilidad vieja)
@@ -1166,8 +1156,9 @@ app.post("/test/whatsapp", requireAdmin, async (req, res) => {
     if (!to || !to.startsWith("whatsapp:")) {
       return res.status(400).json({ ok:false, error: "Falta 'to' (formato whatsapp:+57...)" });
     }
-    if (!waFrom) {
-      return res.status(400).json({ ok:false, error: "Falta WHATSAPP_FROM" });
+    const channel = whatsappConfig.channelForRole("admin");
+    if (!channel.from) {
+      return res.status(400).json({ ok:false, error: `WhatsApp admin no disponible (modo ${channel.mode})` });
     }
 
     const msg = await twilioClient.messages.create(twilioMessageOptions(to, msgBody));
@@ -1188,7 +1179,8 @@ app.post("/ble/report", requireAdmin, async (req, res) => {
 
     const list = getRecipients("admin");
 
-    if (!twilioClient || !waFrom || list.length === 0) {
+    const channel = whatsappConfig.channelForRole("admin");
+    if (!twilioClient || !channel.from || list.length === 0) {
 
       console.log(
         "BLE REPORT: Twilio no configurado o lista vacía"
@@ -1356,8 +1348,8 @@ app.post("/uplink", async (req, res) => {
     // Verificación Twilio
     const ownerRole = cfg.ownerRole || "admin";
     const list = getRecipients(ownerRole);
-    const channelFrom = ownerRole === "guest" ? waSandboxFrom : waFrom;
-    if (!twilioClient || !channelFrom || list.length === 0) {
+    const channel = whatsappConfig.channelForRole(ownerRole);
+    if (!twilioClient || !channel.from || list.length === 0) {
       log("No se envía WhatsApp: falta configuración Twilio/remitente o lista vacía");
       return res.json({ ok:true, warn:"twilio not configured" });
     }
@@ -1398,7 +1390,7 @@ app.post("/uplink", async (req, res) => {
     for (const to of list) {
       try {
         const msg = await twilioClient.messages.create(twilioMessageOptions(to, alert.body, alert.variables, ownerRole));
-        log(`Twilio OK (${ownerRole === "guest" ? "sandbox" : "production"}) ->`, to, msg.sid);
+        log(`Twilio OK (${channel.mode}) ->`, to, msg.sid);
         results.push({ to, sid: msg.sid, ok:true });
       } catch (err) {
         log("Twilio ERROR ->", to, err.message);

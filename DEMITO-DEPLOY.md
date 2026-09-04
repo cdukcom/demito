@@ -8,12 +8,35 @@ SESSION_SECRET=<valor-largo-y-aleatorio>
 TWILIO_ACCOUNT_SID=AC...
 TWILIO_AUTH_TOKEN=...
 WHATSAPP_FROM=+<numero-aprobado-en-Twilio>
+WHATSAPP_SANDBOX_FROM=+14155238886
 TWILIO_CONTENT_SID=HX...
+WHATSAPP_MODE_ADMIN=production
+WHATSAPP_MODE_GUEST=sandbox
 WHATSAPP_TO_ADMIN=whatsapp:+57...,whatsapp:+57...
 WHATSAPP_TO_GUEST=whatsapp:+57...,whatsapp:+57...
 ```
 
 `TWILIO_SID` y `TWILIO_TOKEN` siguen funcionando por compatibilidad, pero se prefieren los nombres oficiales anteriores. `WHATSAPP_FROM` debe ser el número propio aprobado como WhatsApp Sender, no el `+14155238886` del Sandbox.
+
+## Cambio de canal y rollback
+
+Cada rol puede usar `production`, `sandbox` o `disabled`. Si las variables de modo no existen, Demito conserva el modo híbrido seguro: Admin en producción e Invitado en Sandbox.
+
+```text
+# Híbrido actual
+WHATSAPP_MODE_ADMIN=production
+WHATSAPP_MODE_GUEST=sandbox
+
+# Rollback rápido: ambos roles por Sandbox
+WHATSAPP_MODE_ADMIN=sandbox
+WHATSAPP_MODE_GUEST=sandbox
+
+# Migración final: ambos roles por producción
+WHATSAPP_MODE_ADMIN=production
+WHATSAPP_MODE_GUEST=production
+```
+
+El cambio sólo requiere actualizar las variables en Railway y reiniciar el servicio. No modifica MQTT, sensores, destinatarios ni datos persistidos. El Sandbox siempre usa texto libre; la plantilla `TWILIO_CONTENT_SID` sólo se usa en producción cuando el evento proporciona variables.
 
 ## Plantilla de WhatsApp
 
