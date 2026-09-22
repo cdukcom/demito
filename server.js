@@ -5,11 +5,20 @@ const mqtt = require("mqtt");
 const { Pool } = require("pg");
 const crypto = require("crypto");
 const { createWhatsAppConfig } = require("./whatsapp-config");
+const { createRak2461Config, enqueueOutput } = require("./rak2461-actuator");
 
 // --- Twilio ---
 const twilioSid   = process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_SID;
 const twilioToken = process.env.TWILIO_AUTH_TOKEN || process.env.TWILIO_TOKEN;
 const whatsappConfig = createWhatsAppConfig(process.env);
+const rak2461Config = createRak2461Config(process.env);
+const rak2461State = {
+  outputEnabled: true,
+  restoreAt: null,
+  lastTriggerDevEui: null,
+  lastError: null,
+};
+let rak2461RestoreTimer = null;
 
 // --- Destinatarios separados por rol ---
 const ALWAYS_ON = new Set(["whatsapp:+573134991467"]); // fijo por código
@@ -287,6 +296,70 @@ function log(...args) {
   console.log(`[${nowBogota()}]`, ...args);
 }
 
+async function persistRak2461State() {
+  await db.query(`
+    INSERT INTO actuator_state (actuator_id, output_enabled, restore_at, last_trigger_dev_eui, last_error, updated_at)
+    VALUES ('rak2461-main', $1, $2, $3, $4, NOW())
+    ON CONFLICT (actuator_id) DO UPDATE SET
+      output_enabled=EXCLUDED.output_enabled,
+      restore_at=EXCLUDED.restore_at,
+      last_trigger_dev_eui=EXCLUDED.last_trigger_dev_eui,
+      last_error=EXCLUDED.last_error,
+      updated_at=NOW()
+  `, [rak2461State.outputEnabled, rak2461State.restoreAt, rak2461State.lastTriggerDevEui, rak2461State.lastError]);
+}
+
+function scheduleRak2461Restore() {
+  if (rak2461RestoreTimer) clearTimeout(rak2461RestoreTimer);
+  if (rak2461State.outputEnabled || !rak2461State.restoreAt) return;
+  const delay = Math.max(0, new Date(rak2461State.restoreAt).getTime() - Date.now());
+  rak2461RestoreTimer = setTimeout(restoreRak2461Output, delay);
+}
+
+async function restoreRak2461Output() {
+  rak2461RestoreTimer = null;
+  try {
+    await enqueueOutput(rak2461Config, true);
+    rak2461State.outputEnabled = true;
+    rak2461State.restoreAt = null;
+    rak2461State.lastError = null;
+    await persistRak2461State();
+    log("RAK2461 DO ON: salida restaurada automáticamente");
+  } catch (err) {
+    rak2461State.lastError = err.message;
+    await persistRak2461State().catch(dbErr => log("RAK2461 DB ERROR:", dbErr.message));
+    log("RAK2461 DO ON ERROR; se reintentará:", err.message);
+    rak2461RestoreTimer = setTimeout(restoreRak2461Output, rak2461Config.retryMs);
+  }
+}
+
+async function releaseRak2461ForPanic(devEui) {
+  const trigger = String(devEui || "").toLowerCase();
+  if (!rak2461Config.enabled) return { skipped:true, reason:"disabled" };
+  if (!rak2461Config.triggerDevEuis.has(trigger)) return { skipped:true, reason:"not_configured_trigger" };
+
+  await enqueueOutput(rak2461Config, false);
+  rak2461State.outputEnabled = false;
+  rak2461State.restoreAt = new Date(Date.now() + rak2461Config.releaseMs).toISOString();
+  rak2461State.lastTriggerDevEui = trigger;
+  rak2461State.lastError = null;
+  await persistRak2461State();
+  scheduleRak2461Restore();
+  log(`RAK2461 DO OFF: liberado por pánico ${trigger} hasta ${rak2461State.restoreAt}`);
+  return { ok:true, restoreAt:rak2461State.restoreAt };
+}
+
+function rak2461StatusHtml() {
+  const configured = rak2461Config.enabled;
+  const status = !configured ? "Pendiente de configurar" : rak2461State.outputEnabled ? "Lámpara encendida" : "Lámpara apagada";
+  const color = !configured ? "#ff9500" : rak2461State.outputEnabled ? "#34c759" : "#ff3b30";
+  const restore = rak2461State.restoreAt
+    ? `<div class="hint">Reactivación automática: ${escapeHtml(new Date(rak2461State.restoreAt).toLocaleString("es-CO", { timeZone:"America/Bogota" }))}</div>`
+    : "";
+  const error = rak2461State.lastError ? `<div class="hint" style="color:#ff3b30">Último error: ${escapeHtml(rak2461State.lastError)}</div>` : "";
+  return `<section class="card"><div style="display:flex;align-items:center;justify-content:space-between;gap:16px"><div><h2>Actuador de puerta RAK2461</h2><p class="hint">El botón de pánico sólo desconecta la salida durante 5 minutos. La reactivación es automática.</p></div><span class="role-pill" style="background:${color}18;color:${color}">${status}</span></div>${restore}${error}</section>`;
+}
+
 // ------ Acceso MiniWeb seguro -----
 
 function requireAdmin(req, res, next) {
@@ -561,6 +634,8 @@ ${list.map(recipient => `
   <div class="savebar"><button class="btn" type="submit">Guardar configuración</button></div>
 </form>
 </main></div>
+
+${rak2461StatusHtml()}
 
 ${isAdmin ? `<section class="card"><h2>Sensores BLE</h2>
 
@@ -1336,6 +1411,16 @@ app.post("/uplink", async (req, res) => {
       return res.json({ ok:true, skipped: "panic dedup" });
     }
 
+    if (eventKey === "panic") {
+      try {
+        await releaseRak2461ForPanic(devEui);
+      } catch (err) {
+        rak2461State.lastError = err.message;
+        await persistRak2461State().catch(dbErr => log("RAK2461 DB ERROR:", dbErr.message));
+        log("RAK2461 DO OFF ERROR:", err.message);
+      }
+    }
+
     log(`Uplink (${event}) dev=${devName}/${devEui} fCnt=${fCnt} event=${finalEvent} obj=`, obj);
 
     // 3) Política de notificación
@@ -1714,6 +1799,16 @@ async function initDatabase() {
       ip_address TEXT
     );
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS actuator_state (
+      actuator_id TEXT PRIMARY KEY,
+      output_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      restore_at TIMESTAMPTZ,
+      last_trigger_dev_eui TEXT,
+      last_error TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_sensor_history_sensor_ts ON sensor_history (sensor_id, ts DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_sensor_history_event_ts ON sensor_history (event_type, ts DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log (ts DESC)`);
@@ -1738,7 +1833,17 @@ async function initDatabase() {
     enabled:row.enabled, consentAt:row.consent_at, consentVersion:row.consent_version, createdBy:row.created_by,
   });
 
-  log("sensor history, settings, recipients and audit log OK");
+  const actuatorResult = await db.query(`SELECT output_enabled, restore_at, last_trigger_dev_eui, last_error FROM actuator_state WHERE actuator_id='rak2461-main'`);
+  const actuator = actuatorResult.rows[0];
+  if (actuator) {
+    rak2461State.outputEnabled = actuator.output_enabled;
+    rak2461State.restoreAt = actuator.restore_at ? new Date(actuator.restore_at).toISOString() : null;
+    rak2461State.lastTriggerDevEui = actuator.last_trigger_dev_eui;
+    rak2461State.lastError = actuator.last_error;
+    if (!rak2461State.outputEnabled && rak2461Config.enabled) scheduleRak2461Restore();
+  }
+
+  log(`sensor history, settings, recipients, audit log and RAK2461 state OK (enabled=${rak2461Config.enabled})`);
 
 }
 
